@@ -89,9 +89,60 @@ if vix_data is not None and not vix_data.empty:
     ax.legend()
     st.pyplot(fig)
 
-    # Include the updated heatmaps from above
-    # 🔥 **Updated Heatmaps with 30 Days & 12 Months**
-    # (Insert the updated heatmap section here)
+    # 🔥 **Interactive Heatmaps - VIX Spike Analysis**
+    heatmap_data_2sd = vix_data[vix_data['Spike Level'] == '2SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
+    heatmap_data_3sd = vix_data[vix_data['Spike Level'] == '3SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
+
+    # 🔹 Ensure axes always have 30 days and 12 months
+    all_days = list(range(1, 31))  # Days 1-30
+    all_months = list(range(1, 13))  # Months 1-12 (January - December)
+
+    # Reindex the data to ensure all days and months are present
+    heatmap_data_2sd = heatmap_data_2sd.reindex(index=all_months, columns=all_days, fill_value=0)
+    heatmap_data_3sd = heatmap_data_3sd.reindex(index=all_months, columns=all_days, fill_value=0)
+
+    # Convert to NumPy arrays for Plotly
+    heatmap_data_2sd = heatmap_data_2sd.values
+    heatmap_data_3sd = heatmap_data_3sd.values
+
+    # Month labels for better readability
+    month_labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    # 📊 **Heatmap for 2SD Spikes**
+    st.subheader("Heatmap of 2SD VIX Spikes")
+    st.markdown("""
+    The **2SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **two standard deviations above the mean**.
+    """)
+    fig = px.imshow(
+        heatmap_data_2sd, 
+        labels={"color": "Spike Count"},
+        title="Heatmap of 2SD VIX Spikes (Calendar Year)",
+        x=all_days,  # Ensuring x-axis shows days 1-30
+        y=month_labels  # Ensuring y-axis shows months
+    )
+    fig.update_layout(
+        xaxis_title="Day of the Month", 
+        yaxis_title="Month"
+    )
+    st.plotly_chart(fig)
+
+    # 📊 **Heatmap for 3SD Spikes**
+    st.subheader("Heatmap of 3SD VIX Spikes")
+    st.markdown("""
+    The **3SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **three standard deviations above the mean**.
+    """)
+    fig = px.imshow(
+        heatmap_data_3sd, 
+        labels={"color": "Spike Count"},
+        title="Heatmap of 3SD VIX Spikes (Calendar Year)",
+        x=all_days,  
+        y=month_labels  
+    )
+    fig.update_layout(
+        xaxis_title="Day of the Month", 
+        yaxis_title="Month"
+    )
+    st.plotly_chart(fig)
 
 else:
     st.error("Failed to fetch or process VIX data.")
