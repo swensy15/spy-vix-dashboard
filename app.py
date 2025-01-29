@@ -93,20 +93,9 @@ if vix_data is not None and not vix_data.empty:
     heatmap_data_2sd = vix_data[vix_data['Spike Level'] == '2SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
     heatmap_data_3sd = vix_data[vix_data['Spike Level'] == '3SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
 
-    # 🔹 Ensure axes always have 30 days and 12 months
-    all_days = list(range(1, 30))  # Days 1-30
-    all_months = list(range(1, 12))  # Months 1-12 (January - December)
-
-    # Reindex the data to ensure all days and months are present
-    heatmap_data_2sd = heatmap_data_2sd.reindex(index=all_months, columns=all_days, fill_value=0)
-    heatmap_data_3sd = heatmap_data_3sd.reindex(index=all_months, columns=all_days, fill_value=0)
-
-    # Convert to NumPy arrays for Plotly
-    heatmap_data_2sd = heatmap_data_2sd.values
-    heatmap_data_3sd = heatmap_data_3sd.values
-
-    # Month labels for better readability
-    month_labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    # Ensure heatmap data has no NaN values
+    heatmap_data_2sd = heatmap_data_2sd.fillna(0).values
+    heatmap_data_3sd = heatmap_data_3sd.fillna(0).values
 
     # 📊 **Heatmap for 2SD Spikes**
     st.subheader("Heatmap of 2SD VIX Spikes")
@@ -116,9 +105,7 @@ if vix_data is not None and not vix_data.empty:
     fig = px.imshow(
         heatmap_data_2sd, 
         labels={"color": "Spike Count"},
-        title="Heatmap of 2SD VIX Spikes (Calendar Year)",
-        x=all_days,  # Ensuring x-axis shows days 1-30
-        y=month_labels  # Ensuring y-axis shows months
+        title="Heatmap of 2SD VIX Spikes (Calendar Year)"
     )
     fig.update_layout(
         xaxis_title="Day of the Month", 
@@ -134,9 +121,7 @@ if vix_data is not None and not vix_data.empty:
     fig = px.imshow(
         heatmap_data_3sd, 
         labels={"color": "Spike Count"},
-        title="Heatmap of 3SD VIX Spikes (Calendar Year)",
-        x=all_days,  
-        y=month_labels  
+        title="Heatmap of 3SD VIX Spikes (Calendar Year)"
     )
     fig.update_layout(
         xaxis_title="Day of the Month", 
