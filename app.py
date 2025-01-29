@@ -94,8 +94,8 @@ if vix_data is not None and not vix_data.empty:
     heatmap_data_3sd = vix_data[vix_data['Spike Level'] == '3SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
 
     # 🔹 Ensure axes always have 30 days and 12 months
-    all_days = list(range(1, 31))  # Days 1-30
-    all_months = list(range(1, 13))  # Months 1-12 (January - December)
+    all_days = list(range(1, 30))  # Days 1-30
+    all_months = list(range(1, 12))  # Months 1-12 (January - December)
 
     # Reindex the data to ensure all days and months are present
     heatmap_data_2sd = heatmap_data_2sd.reindex(index=all_months, columns=all_days, fill_value=0)
