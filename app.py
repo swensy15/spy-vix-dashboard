@@ -2,8 +2,9 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px  # Only for interactive charts
 
 st.title("Live SPY and VIX Analysis")
 
@@ -55,13 +56,16 @@ if vix_data is not None and not vix_data.empty:
     })
     st.table(vix_levels)
 
-    # 📈 **Interactive Line Chart - SPY & VIX Prices**
+    # 📈 **Static Line Chart - SPY & VIX Prices**
     st.subheader("SPY and VIX Prices")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=spy_data.index, y=spy_data["Close"], mode="lines", name="SPY"))
-    fig.add_trace(go.Scatter(x=vix_data.index, y=vix_data["Close"], mode="lines", name="VIX"))
-    fig.update_layout(title="SPY and VIX Prices Over Time", xaxis_title="Date", yaxis_title="Price", hovermode="x")
-    st.plotly_chart(fig)
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(spy_data.index, spy_data["Close"], label="SPY")
+    ax.plot(vix_data.index, vix_data["Close"], label="VIX")
+    ax.set_title("SPY and VIX Prices Over Time")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Price")
+    ax.legend()
+    st.pyplot(fig)
 
     # 📊 **Interactive Scatterplot - SPY vs. VIX Daily Returns**
     st.subheader("SPY vs. VIX Daily Returns Correlation")
@@ -72,15 +76,18 @@ if vix_data is not None and not vix_data.empty:
     fig = px.scatter(combined, x="SPY Returns", y="VIX Returns", title="SPY vs. VIX Daily Returns Correlation", opacity=0.5)
     st.plotly_chart(fig)
 
-    # 📉 **Interactive Normalized Line Chart - SPY & VIX**
+    # 📉 **Static Normalized Line Chart - SPY & VIX**
     st.subheader("Normalized SPY and VIX Levels")
     spy_normalized = (spy_data['Close'] / spy_data['Close'].iloc[0]) * 100
     vix_normalized = (vix_data['Close'] / vix_data['Close'].iloc[0]) * 100
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=spy_data.index, y=spy_normalized, mode="lines", name="SPY (Normalized)"))
-    fig.add_trace(go.Scatter(x=vix_data.index, y=vix_normalized, mode="lines", name="VIX (Normalized)"))
-    fig.update_layout(title="Normalized SPY and VIX Levels Over Time", xaxis_title="Date", yaxis_title="Normalized Level", hovermode="x")
-    st.plotly_chart(fig)
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(spy_data.index, spy_normalized, label="SPY (Normalized)")
+    ax.plot(vix_data.index, vix_normalized, label="VIX (Normalized)")
+    ax.set_title("Normalized SPY and VIX Levels Over Time")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Normalized Level (Starting at 100)")
+    ax.legend()
+    st.pyplot(fig)
 
     # 🔥 **Interactive Heatmaps - VIX Spike Analysis**
     heatmap_data_2sd = vix_data[vix_data['Spike Level'] == '2SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
@@ -91,7 +98,7 @@ if vix_data is not None and not vix_data.empty:
     st.markdown("""
     The **2SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **two standard deviations above the mean**. 
     """)
-    fig = px.imshow(heatmap_data_2sd, labels={"color": "Spike Count"}, title="Heatmap of 2SD VIX Spikes (Calendar Year)")
+    fig = px.imshow(heatmap_data_2sd, labels={"color": "Spike Count"}, title="Heatmap of 2SD VIX Spikes (Calendar Year"))
     st.plotly_chart(fig)
 
     # Heatmap for 3SD Spikes
@@ -99,7 +106,7 @@ if vix_data is not None and not vix_data.empty:
     st.markdown("""
     The **3SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **three standard deviations above the mean**. 
     """)
-    fig = px.imshow(heatmap_data_3sd, labels={"color": "Spike Count"}, title="Heatmap of 3SD VIX Spikes (Calendar Year)")
+    fig = px.imshow(heatmap_data_3sd, labels={"color": "Spike Count"}, title="Heatmap of 3SD VIX Spikes (Calendar Year"))
     st.plotly_chart(fig)
 
 else:
