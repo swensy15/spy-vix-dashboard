@@ -36,6 +36,10 @@ if vix_data is not None and not vix_data.empty:
         np.where(vix_data['Close'] >= threshold_2sd, '2SD', 'No Spike')
     )
 
+    # Extract Month and Day from the Date index
+    vix_data['Month'] = vix_data.index.month
+    vix_data['Day'] = vix_data.index.day
+
     # Calculate percentile rank for VIX
     sorted_vix_prices = np.sort(vix_data['Close'])  
     vix_percentile = (sorted_vix_prices < current_vix_price).sum() / len(sorted_vix_prices) * 100
@@ -87,19 +91,13 @@ if vix_data is not None and not vix_data.empty:
     ax.set_ylabel("Normalized Level (Starting at 100)")
     ax.legend()
     st.pyplot(fig)
-  # 🔥 **Interactive Heatmaps - VIX Spike Analysis**
+
+    # 🔥 **Interactive Heatmaps - VIX Spike Analysis**
     heatmap_data_2sd = vix_data[vix_data['Spike Level'] == '2SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
     heatmap_data_3sd = vix_data[vix_data['Spike Level'] == '3SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
 
-    # Ensure heatmap data has no NaN values
-    heatmap_data_2sd = heatmap_data_2sd.fillna(0).values
-    heatmap_data_3sd = heatmap_data_3sd.fillna(0).values
-
     # 📊 **Heatmap for 2SD Spikes**
     st.subheader("Heatmap of 2SD VIX Spikes")
-    st.markdown("""
-    The **2SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **two standard deviations above the mean**.
-    """)
     fig = px.imshow(
         heatmap_data_2sd, 
         labels={"color": "Spike Count"},
@@ -113,9 +111,6 @@ if vix_data is not None and not vix_data.empty:
 
     # 📊 **Heatmap for 3SD Spikes**
     st.subheader("Heatmap of 3SD VIX Spikes")
-    st.markdown("""
-    The **3SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **three standard deviations above the mean**.
-    """)
     fig = px.imshow(
         heatmap_data_3sd, 
         labels={"color": "Spike Count"},
@@ -129,4 +124,3 @@ if vix_data is not None and not vix_data.empty:
 
 else:
     st.error("Failed to fetch or process VIX data.")
-
