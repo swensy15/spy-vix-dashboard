@@ -98,6 +98,9 @@ if vix_data is not None and not vix_data.empty:
 
     # 📊 **Heatmap for 2SD Spikes**
     st.subheader("Heatmap of 2SD VIX Spikes")
+        st.markdown("""
+    The **2SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **two standard deviations above the mean**.
+    """)
     fig = px.imshow(
         heatmap_data_2sd, 
         labels={"color": "Spike Count"},
@@ -111,6 +114,9 @@ if vix_data is not None and not vix_data.empty:
 
     # 📊 **Heatmap for 3SD Spikes**
     st.subheader("Heatmap of 3SD VIX Spikes")
+        st.markdown("""
+    The **3SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **three standard deviations above the mean**.
+    """)
     fig = px.imshow(
         heatmap_data_3sd, 
         labels={"color": "Spike Count"},
