@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as st
+import matplotlib.pyplot as plt
 import plotly.express as px
 from pathlib import Path
 import yfinance as yf
@@ -15,7 +15,14 @@ DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 HIST_WINDOW = "10y"
 INTERVAL = "1d"
-ALPHA_VANTAGE_API_KEY = st.secrets.get("ALPHA_VANTAGE_API_KEY", "8WMSNV99XUXRL6A0")  # Replace with your new key
+
+# Load Alpha Vantage API key from secrets
+try:
+    ALPHA_VANTAGE_API_KEY = st.secrets["ALPHA_VANTAGE_API_KEY"]
+except KeyError:
+    st.error("Alpha Vantage API key not found. Please set it in .streamlit/secrets.toml locally or in Streamlit Cloud secrets.")
+    st.stop()
+
 CACHE_TTL = 3600  # 1 hour cache for real-time data
 
 # --- Helpers ---
@@ -124,7 +131,7 @@ if current_spy_price is None:
     st.error("Failed to fetch latest SPY price.")
     st.stop()
 
-current_vix_price = float(vix["Close"].iloc[-1])  # Fixed: Closed the bracket
+current_vix_price = float(vix["Close"].iloc[-1])
 as_of_date = pd.to_datetime(as_of_dt).strftime("%Y-%m-%d")
 
 # --- Metrics ---
