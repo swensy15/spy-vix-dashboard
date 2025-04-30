@@ -8,11 +8,12 @@ import requests
 from io import StringIO
 from alpha_vantage.timeseries import TimeSeries
 from datetime import datetime, timedelta
+import time
 
 # --- Configuration ---
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
-HIST_WINDOW = "5y"  # Reduced to 5 years to speed up loading
+HIST_WINDOW = "5y"
 INTERVAL = "1d"
 
 # Load Alpha Vantage API key from secrets
@@ -26,16 +27,18 @@ CACHE_TTL = 86400  # 24 hours cache for real-time data
 
 # --- Helpers ---
 @st.cache_data
-def load_historical_spy() -> pd.DataFrame:
+def load_historical_spy(_start_time) -> pd.DataFrame:
     """
     Load 5-year SPY history from Parquet if present;
     otherwise fetch via Alpha Vantage or Stooq and save.
     """
     with st.spinner("Loading SPY historical data..."):
+        st.write(f"Starting SPY data load at {datetime.now().strftime('%H:%M:%S')}")
         fp = DATA_DIR / f"SPY_{HIST_WINDOW}.parquet"
         try:
             if fp.exists():
                 df = pd.read_parquet(fp)
+                st.write(f"Loaded SPY data from Parquet in {time.time() - _start_time:.2f} seconds")
                 return df
         except Exception as e:
             st.warning(f"Failed to load cached SPY data: {e}")
@@ -47,9 +50,10 @@ def load_historical_spy() -> pd.DataFrame:
             df.columns = ["Open", "High", "Low", "Close", "Adjusted Close", "Volume", "Dividend", "Split"]
             df.index = pd.to_datetime(df.index)
             df = df[["Open", "High", "Low", "Close", "Volume"]].sort_index()
-            df = df.last("5y")  # Limit to 5 years
+            df = df.last("5y")
             df.to_parquet(fp)
             df["Returns"] = df["Close"].pct_change()
+            st.write(f"Loaded SPY data from Alpha Vantage in {time.time() - _start_time:.2f} seconds")
             return df
         except Exception as e:
             st.warning(f"Alpha Vantage failed: {e}")
@@ -57,7 +61,7 @@ def load_historical_spy() -> pd.DataFrame:
         # Fallback to Stooq
         try:
             url = f"https://stooq.com/q/d/l/?s=spy.us&i=d"
-            resp = requests.get(url, timeout=5)  # Reduced timeout
+            resp = requests.get(url, timeout=3)  # Reduced timeout to 3 seconds
             resp.raise_for_status()
             df = pd.read_csv(StringIO(resp.text), parse_dates=["Date"]).set_index("Date")
             df.columns = [c.capitalize() for c in df.columns]
@@ -65,44 +69,67 @@ def load_historical_spy() -> pd.DataFrame:
             df = df.last("5y")
             df.to_parquet(fp)
             df["Returns"] = df["Close"].pct_change()
+            st.write(f"Loaded SPY data from Stooq in {time.time() - _start_time:.2f} seconds")
             return df
         except Exception as e:
             st.error(f"Stooq failed: {e}")
             return pd.DataFrame()
 
 @st.cache_data
-def load_historical_vix() -> pd.DataFrame:
+def load_historical_vix(_start_time) -> pd.DataFrame:
     """
-    Load 5-year VIX history via Stooq CSV (no rate limits).
+    Load 5-year VIX history via CBOE or Stooq.
     """
     with st.spinner("Loading VIX historical data..."):
+        st.write(f"Starting VIX data load at {datetime.now().strftime('%H:%M:%S')}")
+        # Try CBOE first (direct CSV download)
+        try:
+            url = "https://cdn.cboe.com/api/global/delayed_quotes/vix/history.csv"
+            resp = requests.get(url, timeout=3)
+            resp.raise_for_status()
+            df = pd.read_csv(StringIO(resp.text), parse_dates=["Date"]).set_index("Date")
+            df = df.rename(columns={
+                "Open": "Open", "High": "High", "Low": "Low", "Close": "Close"
+            })
+            df = df[["Open", "High", "Low", "Close"]]
+            df = df.last("5y")
+            df["Returns"] = df["Close"].pct_change()
+            st.write(f"Loaded VIX data from CBOE in {time.time() - _start_time:.2f} seconds")
+            return df
+        except Exception as e:
+            st.warning(f"CBOE failed: {e}")
+
+        # Fallback to Stooq
         try:
             url = "https://stooq.com/q/d/l/?s=vix&i=d"
-            resp = requests.get(url, timeout=5)  # Reduced timeout
+            resp = requests.get(url, timeout=3)
             resp.raise_for_status()
             df = pd.read_csv(StringIO(resp.text), parse_dates=["Date"]).rename(
                 columns=lambda c: c.capitalize()
             ).set_index("Date")
-            df = df.last("5y")  # Limit to 5 years
+            df = df.last("5y")
             df["Returns"] = df["Close"].pct_change()
+            st.write(f"Loaded VIX data from Stooq in {time.time() - _start_time:.2f} seconds")
             return df
         except Exception as e:
             st.error(f"Failed to load VIX data: {e}")
             return pd.DataFrame()
 
 @st.cache_data(ttl=CACHE_TTL)
-def fetch_latest_spy() -> (float, pd.Timestamp):
+def fetch_latest_spy(_start_time) -> (float, pd.Timestamp):
     """
     Fetch the most recent EOD SPY close via Stooq CSV.
     Returns (price, as_of_date).
     """
     with st.spinner("Fetching latest SPY price..."):
+        st.write(f"Starting latest SPY price fetch at {datetime.now().strftime('%H:%M:%S')}")
         try:
             url = "https://stooq.com/q/l/?s=spy.us&f=sd2t2ohlc&h&e=csv"
-            resp = requests.get(url, timeout=5)  # Reduced timeout
+            resp = requests.get(url, timeout=3)
             resp.raise_for_status()
             temp = pd.read_csv(StringIO(resp.text), parse_dates=["Date"])
             last = temp.iloc[-1]
+            st.write(f"Fetched latest SPY price from Stooq in {time.time() - _start_time:.2f} seconds")
             return float(last["Close"]), last["Date"]
         except Exception as e:
             st.warning(f"Stooq latest SPY failed: {e}")
@@ -111,28 +138,32 @@ def fetch_latest_spy() -> (float, pd.Timestamp):
                 ts = TimeSeries(key=ALPHA_VANTAGE_API_KEY, output_format="pandas")
                 df, _ = ts.get_daily(symbol="SPY", outputsize="compact")
                 last = df.iloc[-1]
+                st.write(f"Fetched latest SPY price from Alpha Vantage in {time.time() - _start_time:.2f} seconds")
                 return float(last["4. close"]), pd.to_datetime(df.index[-1])
             except Exception as e:
                 st.error(f"Alpha Vantage latest SPY failed: {e}")
                 return None, None
 
 # --- Load data ---
-spy = load_historical_spy()
-vix = load_historical_vix()
+start_time = time.time()
+spy = load_historical_spy(start_time)
+vix = load_historical_vix(start_time)
 
 if spy.empty or vix.empty:
     st.error("Failed to load required data. Please try again later.")
     st.stop()
 
-current_spy_price, as_of_dt = fetch_latest_spy()
+current_spy_price, as_of_dt = fetch_latest_spy(start_time)
 if current_spy_price is None:
     st.error("Failed to fetch latest SPY price.")
     st.stop()
 
 current_vix_price = float(vix["Close"].iloc[-1])
 as_of_date = pd.to_datetime(as_of_dt).strftime("%Y-%m-%d")
+st.write(f"Finished data loading in {time.time() - start_time:.2f} seconds")
 
 # --- Metrics ---
+start_time = time.time()
 mu, sigma = vix["Close"].agg(["mean", "std"])
 th2, th3 = mu + 2 * sigma, mu + 3 * sigma
 vix_pct = vix["Close"].rank(pct=True).iloc[-1] * 100
@@ -143,12 +174,14 @@ vix = vix.assign(
         np.where(d["Close"] >= th2, "2SD", "No Spike")
     )
 ).assign(Month=vix.index.month, Day=vix.index.day)
+st.write(f"Finished metrics calculation in {time.time() - start_time:.2f} seconds")
 
 # --- Streamlit Layout ---
 st.set_page_config(layout="wide")
 st.title("📊 SPY & VIX Dashboard")
 
 # Overview table
+start_time = time.time()
 summary = pd.DataFrame({
     "Metric": ["SPY (Last)", "VIX (Last)", "VIX 2σ", "VIX 3σ", "VIX Percentile"],
     "Value": [
@@ -162,11 +195,13 @@ summary = pd.DataFrame({
 })
 st.subheader("Overview")
 st.table(summary)
+st.write(f"Rendered overview table in {time.time() - start_time:.2f} seconds")
 
 # Layout: two columns
 col1, col2 = st.columns(2)
 
 with col1:
+    start_time = time.time()
     st.subheader("SPY vs VIX (Normalized to 100)")
     spy_norm = spy["Close"] / spy["Close"].iloc[0] * 100
     vix_norm = vix["Close"] / vix["Close"].iloc[0] * 100
@@ -176,15 +211,19 @@ with col1:
     ax.set_ylabel("Index (Start = 100)")
     ax.legend()
     st.pyplot(fig)
+    st.write(f"Rendered SPY vs VIX chart in {time.time() - start_time:.2f} seconds")
 
 with col2:
+    start_time = time.time()
     st.subheader("Daily Return Correlation")
     ret = pd.concat([spy["Returns"], vix["Returns"]], axis=1).dropna()
     ret.columns = ["SPY", "VIX"]
     fig = px.scatter(ret, x="SPY", y="VIX", opacity=0.5)
     st.plotly_chart(fig)
+    st.write(f"Rendered Daily Return Correlation chart in {time.time() - start_time:.2f} seconds")
 
 # VIX spike heatmaps
+start_time = time.time()
 st.subheader("📅 VIX Spike Calendar")
 hm2 = vix[vix.Spike == "2SD"].groupby(["Month", "Day"]).size().unstack(fill_value=0)
 hm3 = vix[vix.Spike == "3SD"].groupby(["Month", "Day"]).size().unstack(fill_value=0)
@@ -194,3 +233,4 @@ st.plotly_chart(px.imshow(hm2, labels={"color": "Count"}, title="2σ VIX Spikes"
 
 st.markdown("**3σ Spikes**")
 st.plotly_chart(px.imshow(hm3, labels={"color": "Count"}, title="3σ VIX Spikes"))
+st.write(f"Rendered VIX Spike Calendar in {time.time() - start_time:.2f} seconds")
