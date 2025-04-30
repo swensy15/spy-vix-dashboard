@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 import plotly.express as px
 from pathlib import Path
 import yfinance as yf
-from pandas_datareader import data as pdr
+import requests
+from io import StringIO
 
 # ---
 # Configuration
@@ -21,7 +22,7 @@ INTERVAL = "1d"
 @st.cache_data
 def load_historical(ticker: str) -> pd.DataFrame:
     """
-    Load historical data from parquet if exists, else fetch and save for future runs.
+    Load historical data from Parquet if it exists, otherwise fetch from yfinance and save.
     """
     file_path = DATA_DIR / f"{ticker}_{HIST_WINDOW}.parquet"
     if file_path.exists():
@@ -35,12 +36,20 @@ def load_historical(ticker: str) -> pd.DataFrame:
 @st.cache_data(ttl=300)
 def fetch_latest_eod(tickers: list) -> (dict, pd.Timestamp):
     """
-    Fetch most recent EOD close for a list of tickers via Stooq.
+    Fetch most recent EOD close for a list of tickers via Stooq CSV.
+    Returns a dict of {SYMBOL: close} and the as_of date.
     """
-    df = pdr.DataReader(tickers, "stooq")
-    latest = df.iloc[-1]
-    date = df.index[-1]
-    return latest.to_dict(), date
+    # Stooq expects lowercase symbols, separated by commas
+    sym_str = ",".join([t.lower() for t in tickers])
+    url = f"https://stooq.com/q/l/?s={sym_str}&f=sd2t2ohlc&h&e=csv"
+    resp = requests.get(url)
+    resp.raise_for_status()
+
+    df = pd.read_csv(StringIO(resp.text), parse_dates=["Date"]).set_index("Symbol")
+    latest = df.groupby(level=0).last()
+    prices = {sym.upper(): float(latest.loc[sym.lower(), "Close"]) for sym in tickers}
+    as_of = latest.iloc[0].name  if isinstance(latest.index, pd.DatetimeIndex) else latest.iloc[0]["Date"]
+    return prices, as_of
 
 # ---
 # Load data
@@ -49,9 +58,9 @@ spy = load_historical("SPY")
 vix = load_historical("^VIX")
 
 (prices, as_of) = fetch_latest_eod(["SPY", "VIX"])
-current_spy_price = float(prices["SPY"])
-current_vix_price = float(prices["VIX"])
-as_of_date = as_of.strftime("%Y-%m-%d")
+current_spy_price = prices["SPY"]
+current_vix_price = prices["VIX"]
+as_of_date = pd.to_datetime(as_of).strftime("%Y-%m-%d")
 
 # ---
 # Calculate metrics
@@ -66,6 +75,7 @@ vix = vix.assign(
     Spike=lambda df: np.where(df["Close"] >= thresh_3sd, "3SD",
                      np.where(df["Close"] >= thresh_2sd, "2SD", "No Spike"))
 )
+
 vix = vix.assign(Month=vix.index.month, Day=vix.index.day)
 
 # ---
