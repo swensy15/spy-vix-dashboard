@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import plotly.express as px
 from pathlib import Path
 import yfinance as yf
+from pandas_datareader import data as pdr
 
 # ---
 # Configuration
@@ -31,15 +32,15 @@ def load_historical(ticker: str) -> pd.DataFrame:
     df["Returns"] = df["Close"].pct_change()
     return df
 
-@st.cache_data(ttl=600)
-def fetch_latest(ticker: str) -> pd.Series:
+@st.cache_data(ttl=300)
+def fetch_latest_eod(tickers: list) -> (dict, pd.Timestamp):
     """
-    Fetch today's price (or most recent trading day) for a symbol.
+    Fetch most recent EOD close for a list of tickers via Stooq.
     """
-    hist = yf.Ticker(ticker).history(period="1d")
-    close = hist["Close"].iloc[-1]
-    date = hist.index[-1]
-    return pd.Series({"Close": close, "Date": date})
+    df = pdr.DataReader(tickers, "stooq")
+    latest = df.iloc[-1]
+    date = df.index[-1]
+    return latest.to_dict(), date
 
 # ---
 # Load data
@@ -47,27 +48,24 @@ def fetch_latest(ticker: str) -> pd.Series:
 spy = load_historical("SPY")
 vix = load_historical("^VIX")
 
-latest_spy = fetch_latest("SPY")
-latest_vix = fetch_latest("^VIX")
+(prices, as_of) = fetch_latest_eod(["SPY", "VIX"])
+current_spy_price = float(prices["SPY"])
+current_vix_price = float(prices["VIX"])
+as_of_date = as_of.strftime("%Y-%m-%d")
 
 # ---
 # Calculate metrics
 # ---
-# Vectorized mean/std
 mu, sigma = vix["Close"].agg(["mean", "std"])
 thresh_2sd = mu + 2 * sigma
 thresh_3sd = mu + 3 * sigma
 
-# Percentile via rank
 vix_percentile = vix["Close"].rank(pct=True).iloc[-1] * 100
 
-# Spike levels
 vix = vix.assign(
-    Spike=lambda df: np.where(df["Close"] >= thresh_3sd, '3SD',
-                      np.where(df["Close"] >= thresh_2sd, '2SD', 'No Spike'))
+    Spike=lambda df: np.where(df["Close"] >= thresh_3sd, "3SD",
+                     np.where(df["Close"] >= thresh_2sd, "2SD", "No Spike"))
 )
-
-# Calendar breakdown
 vix = vix.assign(Month=vix.index.month, Day=vix.index.day)
 
 # ---
@@ -81,17 +79,13 @@ summary = pd.DataFrame(
     {
         "Metric": ["Current SPY", "Current VIX", "VIX 2σ", "VIX 3σ", "VIX Percentile"],
         "Value": [
-            float(latest_spy.Close),
-            float(latest_vix.Close),
+            current_spy_price,
+            current_vix_price,
             float(thresh_2sd),
             float(thresh_3sd),
             f"{vix_percentile:.1f}th"
         ],
-        "Date": [
-            latest_spy.Date.strftime("%Y-%m-%d"),
-            latest_vix.Date.strftime("%Y-%m-%d"),
-            "-", "-", "-"
-        ]
+        "Date": [as_of_date, as_of_date, "-", "-", "-"]
     }
 )
 st.subheader("Overview")
@@ -121,13 +115,11 @@ with col2:
 
 # --- Heatmaps ---
 st.subheader("📅 VIX Spike Calendar")
-hm2 = vix[vix.Spike == '2SD'].groupby(["Month","Day"]).size().unstack(fill_value=0)
-hm3 = vix[vix.Spike == '3SD'].groupby(["Month","Day"]).size().unstack(fill_value=0)
+hm2 = vix[vix.Spike == "2SD"].groupby(["Month", "Day"]).size().unstack(fill_value=0)
+hm3 = vix[vix.Spike == "3SD"].groupby(["Month", "Day"]).size().unstack(fill_value=0)
 
 st.markdown("**2σ Spikes**")
-st.plotly_chart(px.imshow(hm2, labels={"color":"Count"}, title="2σ VIX Spikes"))
+st.plotly_chart(px.imshow(hm2, labels={"color": "Count"}, title="2σ VIX Spikes"))
 
 st.markdown("**3σ Spikes**")
-st.plotly_chart(px.imshow(hm3, labels={"color":"Count"}, title="3σ VIX Spikes"))
-
-# --- End ---
+st.plotly_chart(px.imshow(hm3, labels={"color": "Count"}, title="3σ VIX Spikes"))
