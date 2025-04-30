@@ -6,31 +6,22 @@ import plotly.express as px
 from pathlib import Path
 import requests
 from io import StringIO
-from alpha_vantage.timeseries import TimeSeries
 from datetime import datetime, timedelta
 import time
+import os
 
 # --- Configuration ---
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 HIST_WINDOW = "5y"
 INTERVAL = "1d"
-
-# Load Alpha Vantage API key from secrets
-try:
-    ALPHA_VANTAGE_API_KEY = st.secrets["ALPHA_VANTAGE_API_KEY"]
-except KeyError:
-    st.error("Alpha Vantage API key not found. Please set it in Streamlit Cloud secrets.")
-    st.stop()
-
 CACHE_TTL = 86400  # 24 hours cache for real-time data
 
 # --- Helpers ---
 @st.cache_data
 def load_historical_spy(_start_time) -> pd.DataFrame:
     """
-    Load 5-year SPY history from Parquet if present;
-    otherwise fetch via Alpha Vantage or Stooq and save.
+    Load 5-year SPY history from Stooq with retries; fallback to pre-fetched CSV.
     """
     with st.spinner("Loading SPY historical data..."):
         st.write(f"Starting SPY data load at {datetime.now().strftime('%H:%M:%S')}")
@@ -43,106 +34,95 @@ def load_historical_spy(_start_time) -> pd.DataFrame:
         except Exception as e:
             st.warning(f"Failed to load cached SPY data: {e}")
 
-        # Try Alpha Vantage first
-        try:
-            ts = TimeSeries(key=ALPHA_VANTAGE_API_KEY, output_format="pandas")
-            df, _ = ts.get_daily_adjusted(symbol="SPY", outputsize="full")
-            df.columns = ["Open", "High", "Low", "Close", "Adjusted Close", "Volume", "Dividend", "Split"]
-            df.index = pd.to_datetime(df.index)
-            df = df[["Open", "High", "Low", "Close", "Volume"]].sort_index()
-            df = df.last("5y")
-            df.to_parquet(fp)
-            df["Returns"] = df["Close"].pct_change()
-            st.write(f"Loaded SPY data from Alpha Vantage in {time.time() - _start_time:.2f} seconds")
-            return df
-        except Exception as e:
-            st.warning(f"Alpha Vantage failed: {e}")
+        # Try Stooq with retries
+        for attempt in range(3):
+            try:
+                url = f"https://stooq.com/q/d/l/?s=spy.us&i=d"
+                resp = requests.get(url, timeout=5)
+                resp.raise_for_status()
+                df = pd.read_csv(StringIO(resp.text), parse_dates=["Date"]).set_index("Date")
+                df.columns = [c.capitalize() for c in df.columns]
+                df = df[["Open", "High", "Low", "Close", "Volume"]]
+                df = df.last("5y")
+                df.to_parquet(fp)
+                df["Returns"] = df["Close"].pct_change()
+                st.write(f"Loaded SPY data from Stooq in {time.time() - _start_time:.2f} seconds")
+                return df
+            except Exception as e:
+                st.warning(f"Stooq attempt {attempt + 1} failed: {e}")
+                if attempt == 2:  # Last attempt
+                    st.error("Failed to fetch SPY data from Stooq after retries.")
 
-        # Fallback to Stooq
+        # Fallback to pre-fetched CSV
         try:
-            url = f"https://stooq.com/q/d/l/?s=spy.us&i=d"
-            resp = requests.get(url, timeout=3)  # Reduced timeout to 3 seconds
-            resp.raise_for_status()
-            df = pd.read_csv(StringIO(resp.text), parse_dates=["Date"]).set_index("Date")
+            df = pd.read_csv("spy_5y.csv", parse_dates=["Date"]).set_index("Date")
             df.columns = [c.capitalize() for c in df.columns]
             df = df[["Open", "High", "Low", "Close", "Volume"]]
-            df = df.last("5y")
-            df.to_parquet(fp)
             df["Returns"] = df["Close"].pct_change()
-            st.write(f"Loaded SPY data from Stooq in {time.time() - _start_time:.2f} seconds")
+            st.write(f"Loaded SPY data from pre-fetched CSV in {time.time() - _start_time:.2f} seconds")
             return df
         except Exception as e:
-            st.error(f"Stooq failed: {e}")
+            st.error(f"Failed to load pre-fetched SPY data: {e}")
             return pd.DataFrame()
 
 @st.cache_data
 def load_historical_vix(_start_time) -> pd.DataFrame:
     """
-    Load 5-year VIX history via CBOE or Stooq.
+    Load 5-year VIX history via Stooq with retries; fallback to pre-fetched CSV.
     """
     with st.spinner("Loading VIX historical data..."):
         st.write(f"Starting VIX data load at {datetime.now().strftime('%H:%M:%S')}")
-        # Try CBOE first (direct CSV download)
-        try:
-            url = "https://cdn.cboe.com/api/global/delayed_quotes/vix/history.csv"
-            resp = requests.get(url, timeout=3)
-            resp.raise_for_status()
-            df = pd.read_csv(StringIO(resp.text), parse_dates=["Date"]).set_index("Date")
-            df = df.rename(columns={
-                "Open": "Open", "High": "High", "Low": "Low", "Close": "Close"
-            })
-            df = df[["Open", "High", "Low", "Close"]]
-            df = df.last("5y")
-            df["Returns"] = df["Close"].pct_change()
-            st.write(f"Loaded VIX data from CBOE in {time.time() - _start_time:.2f} seconds")
-            return df
-        except Exception as e:
-            st.warning(f"CBOE failed: {e}")
+        # Try Stooq with retries
+        for attempt in range(3):
+            try:
+                url = "https://stooq.com/q/d/l/?s=vix&i=d"
+                resp = requests.get(url, timeout=5)
+                resp.raise_for_status()
+                df = pd.read_csv(StringIO(resp.text), parse_dates=["Date"]).rename(
+                    columns=lambda c: c.capitalize()
+                ).set_index("Date")
+                df = df.last("5y")
+                df["Returns"] = df["Close"].pct_change()
+                st.write(f"Loaded VIX data from Stooq in {time.time() - _start_time:.2f} seconds")
+                return df
+            except Exception as e:
+                st.warning(f"Stooq attempt {attempt + 1} failed: {e}")
+                if attempt == 2:  # Last attempt
+                    st.error("Failed to fetch VIX data from Stooq after retries.")
 
-        # Fallback to Stooq
+        # Fallback to pre-fetched CSV
         try:
-            url = "https://stooq.com/q/d/l/?s=vix&i=d"
-            resp = requests.get(url, timeout=3)
-            resp.raise_for_status()
-            df = pd.read_csv(StringIO(resp.text), parse_dates=["Date"]).rename(
-                columns=lambda c: c.capitalize()
-            ).set_index("Date")
+            df = pd.read_csv("vix_5y.csv", parse_dates=["Date"]).set_index("Date")
+            df = df.rename(columns=lambda c: c.capitalize())
             df = df.last("5y")
             df["Returns"] = df["Close"].pct_change()
-            st.write(f"Loaded VIX data from Stooq in {time.time() - _start_time:.2f} seconds")
+            st.write(f"Loaded VIX data from pre-fetched CSV in {time.time() - _start_time:.2f} seconds")
             return df
         except Exception as e:
-            st.error(f"Failed to load VIX data: {e}")
+            st.error(f"Failed to load pre-fetched VIX data: {e}")
             return pd.DataFrame()
 
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_latest_spy(_start_time) -> (float, pd.Timestamp):
     """
-    Fetch the most recent EOD SPY close via Stooq CSV.
-    Returns (price, as_of_date).
+    Fetch the most recent EOD SPY close via Stooq with retries.
     """
     with st.spinner("Fetching latest SPY price..."):
         st.write(f"Starting latest SPY price fetch at {datetime.now().strftime('%H:%M:%S')}")
-        try:
-            url = "https://stooq.com/q/l/?s=spy.us&f=sd2t2ohlc&h&e=csv"
-            resp = requests.get(url, timeout=3)
-            resp.raise_for_status()
-            temp = pd.read_csv(StringIO(resp.text), parse_dates=["Date"])
-            last = temp.iloc[-1]
-            st.write(f"Fetched latest SPY price from Stooq in {time.time() - _start_time:.2f} seconds")
-            return float(last["Close"]), last["Date"]
-        except Exception as e:
-            st.warning(f"Stooq latest SPY failed: {e}")
-            # Fallback to Alpha Vantage
+        for attempt in range(3):
             try:
-                ts = TimeSeries(key=ALPHA_VANTAGE_API_KEY, output_format="pandas")
-                df, _ = ts.get_daily(symbol="SPY", outputsize="compact")
-                last = df.iloc[-1]
-                st.write(f"Fetched latest SPY price from Alpha Vantage in {time.time() - _start_time:.2f} seconds")
-                return float(last["4. close"]), pd.to_datetime(df.index[-1])
+                url = "https://stooq.com/q/l/?s=spy.us&f=sd2t2ohlc&h&e=csv"
+                resp = requests.get(url, timeout=5)
+                resp.raise_for_status()
+                temp = pd.read_csv(StringIO(resp.text), parse_dates=["Date"])
+                last = temp.iloc[-1]
+                st.write(f"Fetched latest SPY price from Stooq in {time.time() - _start_time:.2f} seconds")
+                return float(last["Close"]), last["Date"]
             except Exception as e:
-                st.error(f"Alpha Vantage latest SPY failed: {e}")
-                return None, None
+                st.warning(f"Stooq attempt {attempt + 1} failed: {e}")
+                if attempt == 2:  # Last attempt
+                    st.error("Failed to fetch latest SPY price from Stooq after retries.")
+                    return None, None
 
 # --- Load data ---
 start_time = time.time()
