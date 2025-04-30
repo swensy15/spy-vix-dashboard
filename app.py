@@ -15,7 +15,7 @@ DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 HIST_WINDOW = "10y"
 INTERVAL = "1d"
-ALPHA_VANTAGE_API_KEY = st.secrets.get("ALPHA_VANTAGE_API_KEY", "YOUR_API_KEY")  # Add to Streamlit secrets
+ALPHA_VANTAGE_API_KEY = st.secrets.get("ALPHA_VANTAGE_API_KEY", "8WMSNV99XUXRL6A0")  # Add to Streamlit secrets
 CACHE_TTL = 3600  # 1 hour cache for real-time data
 
 # --- Helpers ---
