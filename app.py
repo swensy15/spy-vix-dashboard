@@ -1,129 +1,133 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import plotly.express as px  # For interactive charts
+import plotly.express as px
+from pathlib import Path
+import yfinance as yf
 
-st.title("Live SPY and VIX Analysis")
+# ---
+# Configuration
+# ---
+DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR.mkdir(exist_ok=True)
+HIST_WINDOW = "10y"
+INTERVAL = "1d"
 
-# Fetch data for SPY and VIX
+# ---
+# Helpers
+# ---
 @st.cache_data
-def fetch_data():
-    spy = yf.download("SPY", period="10y", interval="1d")
-    vix = yf.download("^VIX", period="10y", interval="1d")
-    spy['Returns'] = spy['Close'].pct_change()
-    vix['Returns'] = vix['Close'].pct_change()
-    return spy, vix
+def load_historical(ticker: str) -> pd.DataFrame:
+    """
+    Load historical data from parquet if exists, else fetch and save for future runs.
+    """
+    file_path = DATA_DIR / f"{ticker}_{HIST_WINDOW}.parquet"
+    if file_path.exists():
+        df = pd.read_parquet(file_path)
+    else:
+        df = yf.download(ticker, period=HIST_WINDOW, interval=INTERVAL)
+        df.to_parquet(file_path)
+    df["Returns"] = df["Close"].pct_change()
+    return df
 
-spy_data, vix_data = fetch_data()
+@st.cache_data(ttl=600)
+def fetch_latest(ticker: str) -> pd.Series:
+    """
+    Fetch today's price (or most recent trading day) for a symbol.
+    """
+    hist = yf.Ticker(ticker).history(period="1d")
+    close = hist["Close"].iloc[-1]
+    date = hist.index[-1]
+    return pd.Series({"Close": close, "Date": date})
 
-# Fetch latest SPY and VIX data
-latest_spy = yf.Ticker("SPY").history(period="1d")
-current_spy_price = latest_spy['Close'].iloc[-1]  
-current_spy_date = latest_spy.index[-1].strftime("%Y-%m-%d")  
+# ---
+# Load data
+# ---
+spy = load_historical("SPY")
+vix = load_historical("^VIX")
 
-latest_vix = yf.Ticker("^VIX").history(period="1d")
-current_vix_price = latest_vix['Close'].iloc[-1]  
-current_vix_date = latest_vix.index[-1].strftime("%Y-%m-%d")  
+latest_spy = fetch_latest("SPY")
+latest_vix = fetch_latest("^VIX")
 
-if vix_data is not None and not vix_data.empty:
-    threshold_2sd = vix_data['Close'].mean() + 2 * vix_data['Close'].std()
-    threshold_3sd = vix_data['Close'].mean() + 3 * vix_data['Close'].std()
+# ---
+# Calculate metrics
+# ---
+# Vectorized mean/std
+mu, sigma = vix["Close"].agg(["mean", "std"])
+thresh_2sd = mu + 2 * sigma
+thresh_3sd = mu + 3 * sigma
 
-    vix_data['Spike Level'] = np.where(
-        vix_data['Close'] >= threshold_3sd, '3SD',
-        np.where(vix_data['Close'] >= threshold_2sd, '2SD', 'No Spike')
-    )
+# Percentile via rank
+vix_percentile = vix["Close"].rank(pct=True).iloc[-1] * 100
 
-    # Extract Month and Day from the Date index
-    vix_data['Month'] = vix_data.index.month
-    vix_data['Day'] = vix_data.index.day
+# Spike levels
+vix = vix.assign(
+    Spike=lambda df: np.where(df["Close"] >= thresh_3sd, '3SD',
+                      np.where(df["Close"] >= thresh_2sd, '2SD', 'No Spike'))
+)
 
-    # Calculate percentile rank for VIX
-    sorted_vix_prices = np.sort(vix_data['Close'])  
-    vix_percentile = (sorted_vix_prices < current_vix_price).sum() / len(sorted_vix_prices) * 100
+# Calendar breakdown
+vix = vix.assign(Month=vix.index.month, Day=vix.index.day)
 
-    # Display Data Table with SPY and VIX
-    st.subheader("Current SPY & VIX Prices, Threshold Levels, and VIX Percentile Rank")
-    price_levels = pd.DataFrame({
-        "Metric": ["Current SPY Price", "Current VIX Price", "2 Standard Deviations (VIX)", "3 Standard Deviations (VIX)", "VIX Percentile Rank"],
+# ---
+# Streamlit App Layout
+# ---
+st.set_page_config(layout="wide")
+st.title("📊 SPY & VIX Dashboard")
+
+# Summary metrics table
+summary = pd.DataFrame(
+    {
+        "Metric": ["Current SPY", "Current VIX", "VIX 2σ", "VIX 3σ", "VIX Percentile"],
         "Value": [
-            float(current_spy_price),
-            float(current_vix_price),
-            float(threshold_2sd),
-            float(threshold_3sd),
-            f"{vix_percentile:.2f}th Percentile"
+            float(latest_spy.Close),
+            float(latest_vix.Close),
+            float(thresh_2sd),
+            float(thresh_3sd),
+            f"{vix_percentile:.1f}th"
         ],
-        "Date": [current_spy_date, current_vix_date, "-", "-", "-"]
-    })
-    st.table(price_levels)
+        "Date": [
+            latest_spy.Date.strftime("%Y-%m-%d"),
+            latest_vix.Date.strftime("%Y-%m-%d"),
+            "-", "-", "-"
+        ]
+    }
+)
+st.subheader("Overview")
+st.table(summary)
 
-    # 📈 **Static Line Chart - SPY & VIX Prices**
-    st.subheader("SPY and VIX Prices Over Time")
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(spy_data.index, spy_data["Close"], label="SPY")
-    ax.plot(vix_data.index, vix_data["Close"], label="VIX")
-    ax.set_title("SPY and VIX Prices Over Time")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Price")
+# --- Charts ---
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("SPY vs VIX (100% normalized)")
+    spy_norm = spy["Close"] / spy["Close"].iloc[0] * 100
+    vix_norm = vix["Close"] / vix["Close"].iloc[0] * 100
+    fig, ax = plt.subplots()
+    ax.plot(spy_norm, label="SPY")
+    ax.plot(vix_norm, label="VIX")
+    ax.set_ylabel("Index (Start = 100)")
     ax.legend()
     st.pyplot(fig)
 
-    # 📊 **Interactive Scatterplot - SPY vs. VIX Daily Returns**
-    st.subheader("SPY vs. VIX Daily Returns Correlation")
-    combined = pd.DataFrame({
-        "SPY Returns": spy_data["Returns"],
-        "VIX Returns": vix_data["Returns"]
-    }).dropna()
-    fig = px.scatter(combined, x="SPY Returns", y="VIX Returns", title="SPY vs. VIX Daily Returns Correlation", opacity=0.5)
+with col2:
+    st.subheader("SPY vs VIX Returns")
+    ret = pd.concat([spy["Returns"], vix["Returns"]], axis=1).dropna()
+    ret.columns = ["SPY", "VIX"]
+    fig = px.scatter(ret, x="SPY", y="VIX", opacity=0.5,
+                     title="Daily Return Correlation")
     st.plotly_chart(fig)
 
-    # 📉 **Static Normalized Line Chart - SPY & VIX**
-    st.subheader("Normalized SPY and VIX Levels")
-    spy_normalized = (spy_data['Close'] / spy_data['Close'].iloc[0]) * 100
-    vix_normalized = (vix_data['Close'] / vix_data['Close'].iloc[0]) * 100
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(spy_data.index, spy_normalized, label="SPY (Normalized)")
-    ax.plot(vix_data.index, vix_normalized, label="VIX (Normalized)")
-    ax.set_title("Normalized SPY and VIX Levels Over Time")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Normalized Level (Starting at 100)")
-    ax.legend()
-    st.pyplot(fig)
+# --- Heatmaps ---
+st.subheader("📅 VIX Spike Calendar")
+hm2 = vix[vix.Spike == '2SD'].groupby(["Month","Day"]).size().unstack(fill_value=0)
+hm3 = vix[vix.Spike == '3SD'].groupby(["Month","Day"]).size().unstack(fill_value=0)
 
-    # 🔥 **Interactive Heatmaps - VIX Spike Analysis**
-    heatmap_data_2sd = vix_data[vix_data['Spike Level'] == '2SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
-    heatmap_data_3sd = vix_data[vix_data['Spike Level'] == '3SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
+st.markdown("**2σ Spikes**")
+st.plotly_chart(px.imshow(hm2, labels={"color":"Count"}, title="2σ VIX Spikes"))
 
-    # 📊 **Heatmap for 2SD Spikes**
-    st.subheader("Heatmap of 2SD VIX Spikes")
-    st.markdown("""The **2SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **two standard deviations above the mean**.""")
-    fig = px.imshow(
-        heatmap_data_2sd, 
-        labels={"color": "Spike Count"},
-        title="Heatmap of 2SD VIX Spikes (Calendar Year)"
-    )
-    fig.update_layout(
-        xaxis_title="Day of the Month", 
-        yaxis_title="Month"
-    )
-    st.plotly_chart(fig)
+st.markdown("**3σ Spikes**")
+st.plotly_chart(px.imshow(hm3, labels={"color":"Count"}, title="3σ VIX Spikes"))
 
-    # 📊 **Heatmap for 3SD Spikes**
-    st.subheader("Heatmap of 3SD VIX Spikes")
-    st.markdown("""The **3SD heatmap** visualizes the frequency of VIX spikes that were greater than or equal to **three standard deviations above the mean**.
-    """)
-    fig = px.imshow(
-        heatmap_data_3sd, 
-        labels={"color": "Spike Count"},
-        title="Heatmap of 3SD VIX Spikes (Calendar Year)"
-    )
-    fig.update_layout(
-        xaxis_title="Day of the Month", 
-        yaxis_title="Month"
-    )
-    st.plotly_chart(fig)
-
-else:
-    st.error("Failed to fetch or process VIX data.")
+# --- End ---
