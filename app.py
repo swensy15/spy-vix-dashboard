@@ -20,7 +20,7 @@ INTERVAL = "1d"
 try:
     ALPHA_VANTAGE_API_KEY = st.secrets["ALPHA_VANTAGE_API_KEY"]
 except KeyError:
-    st.error("Alpha Vantage API key not found. Please set it in .streamlit/secrets.toml locally or in Streamlit Cloud secrets.")
+    st.error("Alpha Vantage API key not found. Please set it in Streamlit Cloud secrets.")
     st.stop()
 
 CACHE_TTL = 3600  # 1 hour cache for real-time data
