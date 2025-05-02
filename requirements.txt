@@ -1,7 +1,6 @@
 streamlit
-yfinance
 pandas
 numpy
 matplotlib
 plotly
-retrying
+requests
