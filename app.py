@@ -14,8 +14,6 @@ st.title("Live SPY and VIX Analysis")
 # ── 1) Load your Morningstar credentials securely ──
 # Put these in ~/.streamlit/secrets.toml under [morningstar], or in Streamlit Cloud Secrets
 # [morningstar]
-# username = "stephens@atlasinvestmentmgmt.com"
-# password = "Potsancheeki880$"
 username = st.secrets.morningstar.username
 password = st.secrets.morningstar.password
 
