@@ -3,4 +3,4 @@ pandas
 numpy
 matplotlib
 plotly
-morningstar_data
+requests
