@@ -1,9 +1,7 @@
+streamlit
 yfinance
 pandas
 numpy
 matplotlib
-seaborn
-streamlit
 plotly
-requests
-alpha-vantage
+retrying
