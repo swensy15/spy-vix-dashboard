@@ -48,10 +48,12 @@ def fetch_spy_data(symbol, api_key):
         data = response.json()
         
         if "Time Series (Daily)" not in data:
-            if "Note" in data and "minute" in data["Note"]:  # Rate limit hit
-                st.error(f"API rate limit exceeded for {symbol}. Please wait or upgrade your plan.")
+            error_msg = data.get('Note', 'Unknown error')
+            if "minute" in error_msg.lower():
+                st.error(f"API rate limit exceeded for {symbol}. Please wait an hour or upgrade your plan.")
             else:
-                st.error(f"Error fetching data for {symbol}: {data.get('Note', 'Unknown error')}")
+                st.error(f"Error fetching data for {symbol}: {error_msg}")
+            print(f"Debug: API response for {symbol} - {data}")  # Log the full response
             return None
             
         # Convert to DataFrame
@@ -75,6 +77,7 @@ def fetch_spy_data(symbol, api_key):
     
     except Exception as e:
         st.error(f"Failed to fetch data for {symbol}: {str(e)}")
+        print(f"Debug: Fetch error for {symbol} - {str(e)}")  # Log the exception
         return None
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
@@ -92,6 +95,7 @@ def fetch_vix_data(fred_api_key):
     
     except Exception as e:
         st.error(f"Failed to fetch VIX data from FRED: {str(e)}")
+        print(f"Debug: Fetch VIX error - {str(e)}")  # Log the exception
         return None
 
 # Fetch latest prices
@@ -107,7 +111,9 @@ def fetch_latest_spy_price(symbol, api_key):
         data = response.json()
         
         if "Global Quote" not in data or not data["Global Quote"]:
-            st.error(f"Failed to fetch latest price for {symbol}: No data returned")
+            error_msg = data.get('Note', 'No data returned')
+            st.error(f"Failed to fetch latest price for {symbol}: {error_msg}")
+            print(f"Debug: Latest price API response for {symbol} - {data}")  # Log the full response
             return None, None
             
         quote = data["Global Quote"]
@@ -116,6 +122,7 @@ def fetch_latest_spy_price(symbol, api_key):
         return price, date
     except Exception as e:
         st.error(f"Failed to fetch latest price for {symbol}: {str(e)}")
+        print(f"Debug: Latest price fetch error for {symbol} - {str(e)}")  # Log the exception
         return None, None
 
 @st.cache_data(ttl=3600)
@@ -128,6 +135,7 @@ def fetch_latest_vix_price(fred_api_key):
         return latest_price, latest_date
     except Exception as e:
         st.error(f"Failed to fetch latest VIX price from FRED: {str(e)}")
+        print(f"Debug: Latest VIX price fetch error - {str(e)}")  # Log the exception
         return None, None
 
 # Load SPY and VIX data
