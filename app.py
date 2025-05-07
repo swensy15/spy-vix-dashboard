@@ -4,11 +4,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
 from fredapi import Fred
+import requests
+from bs4 import BeautifulSoup
 
 # Streamlit page configuration
 st.set_page_config(page_title="VIX Dashboard", layout="wide")
 st.title("VIX Analysis")
-st.markdown("**Note**: VIX data is sourced from FRED (Federal Reserve Economic Data).")
+st.markdown("**Note**: VIX data is sourced from FRED (Federal Reserve Economic Data). SPY price is sourced from a delayed public web feed.")
 
 # Load API key from Streamlit secrets or environment variables
 try:
@@ -50,6 +52,28 @@ def fetch_latest_vix_price(fred_api_key):
         st.error(f"Failed to fetch latest VIX price from FRED: {str(e)}")
         return None, None
 
+# Fetch delayed SPY price from Google Finance
+@st.cache_data(ttl=300)  # Cache for 5 minutes due to delayed data
+def fetch_spy_price():
+    try:
+        url = "https://www.google.com/finance/quote/SPY:NYSEARCA"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        price_element = soup.find('div', class_='YMlKec fxKbKc')
+        if price_element:
+            price = float(price_element.text.replace('$', '').replace(',', ''))
+            date_element = soup.find('div', class_='ygUjEc')  # Approximate class for date, may need adjustment
+            date = date_element.text if date_element else "Delayed"
+            return price, date
+        else:
+            st.error("Failed to parse SPY price from web source.")
+            return None, None
+    except Exception as e:
+        st.error(f"Failed to fetch SPY price: {str(e)}")
+        return None, None
+
 # Load VIX data
 def load_data(fred_key):
     vix_data = fetch_vix_data(fred_key)
@@ -60,8 +84,9 @@ if FRED_API_KEY:
     # Load historical data
     vix_data = load_data(FRED_API_KEY)
     
-    # Load latest price
+    # Load latest prices
     current_vix_price, current_vix_date = fetch_latest_vix_price(FRED_API_KEY)
+    current_spy_price, current_spy_date = fetch_spy_price()
     
     if vix_data is not None and not vix_data.empty:
         # Create a copy of vix_data for heatmap purposes
@@ -85,18 +110,20 @@ if FRED_API_KEY:
         sorted_vix_prices = np.sort(vix_data_full['Close'])
         vix_percentile = (sorted_vix_prices < current_vix_price).sum() / len(sorted_vix_prices) * 100 if current_vix_price else 0
         
-        # Display current price and thresholds
-        st.subheader("Current VIX Price, Thresholds, and Percentile Rank")
+        # Display current prices and thresholds
+        st.subheader("Current VIX & SPY Prices, Thresholds, and VIX Percentile Rank")
         price_levels = pd.DataFrame({
-            "Metric": ["Current VIX Price", "2 Standard Deviations (VIX)", "3 Standard Deviations (VIX)", "VIX Percentile Rank"],
+            "Metric": ["Current VIX Price", "Current SPY Price", "2 Standard Deviations (VIX)", "3 Standard Deviations (VIX)", "VIX Percentile Rank"],
             "Value": [
                 f"{current_vix_price:.2f}" if current_vix_price else "N/A",
+                f"{current_spy_price:.2f}" if current_spy_price else "N/A",
                 f"{threshold_2sd:.2f}",
                 f"{threshold_3sd:.2f}",
                 f"{vix_percentile:.2f}th Percentile" if current_vix_price else "N/A"
             ],
             "Date": [
                 current_vix_date if current_vix_date else "N/A",
+                current_spy_date if current_spy_date else "N/A",
                 "-", "-", "-"
             ]
         })
