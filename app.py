@@ -53,7 +53,7 @@ def fetch_spy_data(symbol, api_key):
                 st.error(f"API rate limit exceeded for {symbol}. Please wait an hour or upgrade your plan.")
             else:
                 st.error(f"Error fetching data for {symbol}: {error_msg}")
-            st.write(f"Debug: API response for {symbol} - {data}")  # Changed to st.write
+            st.write(f"Debug: API response for {symbol} - {data}")
             return None
             
         # Convert to DataFrame
@@ -77,7 +77,7 @@ def fetch_spy_data(symbol, api_key):
     
     except Exception as e:
         st.error(f"Failed to fetch data for {symbol}: {str(e)}")
-        st.write(f"Debug: Fetch error for {symbol} - {str(e)}")  # Changed to st.write
+        st.write(f"Debug: Fetch error for {symbol} - {str(e)}")
         return None
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
@@ -95,7 +95,7 @@ def fetch_vix_data(fred_api_key):
     
     except Exception as e:
         st.error(f"Failed to fetch VIX data from FRED: {str(e)}")
-        st.write(f"Debug: Fetch VIX error - {str(e)}")  # Changed to st.write
+        st.write(f"Debug: Fetch VIX error - {str(e)}")
         return None
 
 # Fetch latest prices
@@ -113,7 +113,7 @@ def fetch_latest_spy_price(symbol, api_key):
         if "Global Quote" not in data or not data["Global Quote"]:
             error_msg = data.get('Note', 'No data returned')
             st.error(f"Failed to fetch latest price for {symbol}: {error_msg}")
-            st.write(f"Debug: Latest price API response for {symbol} - {data}")  # Changed to st.write
+            st.write(f"Debug: Latest price API response for {symbol} - {data}")
             return None, None
             
         quote = data["Global Quote"]
@@ -122,7 +122,7 @@ def fetch_latest_spy_price(symbol, api_key):
         return price, date
     except Exception as e:
         st.error(f"Failed to fetch latest price for {symbol}: {str(e)}")
-        st.write(f"Debug: Latest price fetch error for {symbol} - {str(e)}")  # Changed to st.write
+        st.write(f"Debug: Latest price fetch error for {symbol} - {str(e)}")
         return None, None
 
 @st.cache_data(ttl=3600)
@@ -135,7 +135,7 @@ def fetch_latest_vix_price(fred_api_key):
         return latest_price, latest_date
     except Exception as e:
         st.error(f"Failed to fetch latest VIX price from FRED: {str(e)}")
-        st.write(f"Debug: Latest VIX price fetch error - {str(e)}")  # Changed to st.write
+        st.write(f"Debug: Latest VIX price fetch error - {str(e)}")
         return None, None
 
 # Load SPY and VIX data
@@ -154,26 +154,34 @@ if ALPHA_VANTAGE_API_KEY and FRED_API_KEY:
     current_vix_price, current_vix_date = fetch_latest_vix_price(FRED_API_KEY)
     
     if spy_data is not None and vix_data is not None and not spy_data.empty and not vix_data.empty:
-        # Align SPY and VIX data (since FRED VIX data might have different dates)
-        spy_data = spy_data[spy_data.index.isin(vix_data.index)]
-        vix_data = vix_data[vix_data.index.isin(spy_data.index)]
+        # Create a copy of vix_data for heatmap purposes (avoid truncation)
+        vix_data_full = vix_data.copy()
         
-        # Calculate VIX thresholds
-        threshold_2sd = vix_data['Close'].mean() + 2 * vix_data['Close'].std()
-        threshold_3sd = vix_data['Close'].mean() + 3 * vix_data['Close'].std()
+        # Align SPY and VIX data for other plots (e.g., line charts)
+        aligned_dates = spy_data.index.intersection(vix_data.index)
+        spy_data_aligned = spy_data.loc[aligned_dates]
+        vix_data_aligned = vix_data.loc[aligned_dates]
         
-        # Assign spike levels
-        vix_data['Spike Level'] = np.where(
-            vix_data['Close'] >= threshold_3sd, '3SD',
-            np.where(vix_data['Close'] >= threshold_2sd, '2SD', 'No Spike')
+        # Calculate VIX thresholds using the full dataset
+        threshold_2sd = vix_data_full['Close'].mean() + 2 * vix_data_full['Close'].std()
+        threshold_3sd = vix_data_full['Close'].mean() + 3 * vix_data_full['Close'].std()
+        
+        # Assign spike levels using the full dataset
+        vix_data_full['Spike Level'] = np.where(
+            vix_data_full['Close'] >= threshold_3sd, '3SD',
+            np.where(vix_data_full['Close'] >= threshold_2sd, '2SD', 'No Spike')
         )
         
-        # Extract month and day for heatmap
-        vix_data['Month'] = vix_data.index.month
-        vix_data['Day'] = vix_data.index.day
+        # Extract month and day for heatmap using the full dataset
+        vix_data_full['Month'] = vix_data_full.index.month
+        vix_data_full['Day'] = vix_data_full.index.day
+        
+        # Use aligned data for other calculations
+        vix_data = vix_data_aligned
+        spy_data = spy_data_aligned
         
         # Calculate VIX percentile rank
-        sorted_vix_prices = np.sort(vix_data['Close'])
+        sorted_vix_prices = np.sort(vix_data_full['Close'])
         vix_percentile = (sorted_vix_prices < current_vix_price).sum() / len(sorted_vix_prices) * 100 if current_vix_price else 0
         
         # Display current prices and thresholds
@@ -237,33 +245,45 @@ if ALPHA_VANTAGE_API_KEY and FRED_API_KEY:
         ax.grid(True)
         st.pyplot(fig)
         
-# Heatmaps for VIX Spikes
-st.subheader("Heatmap of 2SD VIX Spikes")
-st.markdown("Visualizes the frequency of VIX spikes ≥ 2 standard deviations above the mean across all historical data.")
-# Create heatmap data for 2SD spikes
-heatmap_data_2sd = vix_data[vix_data['Spike Level'] == '2SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
-# Ensure all days (1-31) and months (1-12) are included, even with zero counts
-heatmap_data_2sd = heatmap_data_2sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value=0)
-fig = px.imshow(
-    heatmap_data_2sd,
-    labels={"color": "Spike Count"},
-    title=f"Heatmap of 2SD VIX Spikes (Historical, {vix_data.index.year.min()}-{vix_data.index.year.max()})",
-    color_continuous_scale="YlOrRd"
-)
-fig.update_layout(xaxis_title="Day of the Month", yaxis_title="Month")
-st.plotly_chart(fig)
+        # Debug: Verify VIX data range and spike counts
+        st.write(f"VIX data range: {vix_data_full.index.min()} to {vix_data_full.index.max()}")
+        st.write(f"Total 2SD spikes: {len(vix_data_full[vix_data_full['Spike Level'] == '2SD'])}")
+        st.write(f"Total 3SD spikes: {len(vix_data_full[vix_data_full['Spike Level'] == '3SD'])}")
 
-st.subheader("Heatmap of 3SD VIX Spikes")
-st.markdown("Visualizes the frequency of VIX spikes ≥ 3 standard deviations above the mean across all historical data.")
-# Create heatmap data for 3SD spikes
-heatmap_data_3sd = vix_data[vix_data['Spike Level'] == '3SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
-# Ensure all days (1-31) and months (1-12) are included, even with zero counts
-heatmap_data_3sd = heatmap_data_3sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value=0)
-fig = px.imshow(
-    heatmap_data_3sd,
-    labels={"color": "Spike Count"},
-    title=f"Heatmap of 3SD VIX Spikes (Historical, {vix_data.index.year.min()}-{vix_data.index.year.max()})",
-    color_continuous_scale="YlOrRd"
-)
-fig.update_layout(xaxis_title="Day of the Month", yaxis_title="Month")
-st.plotly_chart(fig)
+        # Heatmaps for VIX Spikes
+        st.subheader("Heatmap of 2SD VIX Spikes")
+        st.markdown("Visualizes the frequency of VIX spikes ≥ 2 standard deviations above the mean across all historical data.")
+        # Create heatmap data for 2SD spikes
+        heatmap_data_2sd = vix_data_full[vix_data_full['Spike Level'] == '2SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
+        # Ensure all days (1-31) and months (1-12) are included, even with zero counts
+        heatmap_data_2sd = heatmap_data_2sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value=0)
+        # Debug: Check heatmap data
+        st.write("2SD Heatmap Data (Sample):", heatmap_data_2sd.iloc[:3, :5])  # Show a small portion of the heatmap data
+        fig = px.imshow(
+            heatmap_data_2sd,
+            labels={"color": "Spike Count"},
+            title=f"Heatmap of 2SD VIX Spikes (Historical, {vix_data_full.index.year.min()}-{vix_data_full.index.year.max()})",
+            color_continuous_scale="YlOrRd"
+        )
+        fig.update_layout(xaxis_title="Day of the Month", yaxis_title="Month")
+        st.plotly_chart(fig)
+
+        st.subheader("Heatmap of 3SD VIX Spikes")
+        st.markdown("Visualizes the frequency of VIX spikes ≥ 3 standard deviations above the mean across all historical data.")
+        # Create heatmap data for 3SD spikes
+        heatmap_data_3sd = vix_data_full[vix_data_full['Spike Level'] == '3SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
+        # Ensure all days (1-31) and months (1-12) are included, even with zero counts
+        heatmap_data_3sd = heatmap_data_3sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value=0)
+        # Debug: Check heatmap data
+        st.write("3SD Heatmap Data (Sample):", heatmap_data_3sd.iloc[:3, :5])  # Show a small portion of the heatmap data
+        fig = px.imshow(
+            heatmap_data_3sd,
+            labels={"color": "Spike Count"},
+            title=f"Heatmap of 3SD VIX Spikes (Historical, {vix_data_full.index.year.min()}-{vix_data_full.index.year.max()})",
+            color_continuous_scale="YlOrRd"
+        )
+        fig.update_layout(xaxis_title="Day of the Month", yaxis_title="Month")
+        st.plotly_chart(fig)
+    
+    else:
+        st.error("Failed to load SPY or VIX data. Please check your API keys or try again later.")
