@@ -5,4 +5,4 @@ matplotlib
 plotly-express
 requests
 fredapi
-polygon-api-client
+beautifulsoup4
