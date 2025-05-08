@@ -106,21 +106,21 @@ def load_data(fred_key):
     if vix_data is not None and sp500_data is not None:
         # Merge VIX and S&P 500 data on the date index
         combined_data = vix_data.join(sp500_data, how='inner')
-        return combined_data
-    return None
+        return vix_data, combined_data
+    return None, None
 
 # Main app logic
 if FRED_API_KEY:
     # Load historical data
-    combined_data = load_data(FRED_API_KEY)
+    vix_data, combined_data = load_data(FRED_API_KEY)
     
     # Load latest prices
     current_vix_price, current_vix_date = fetch_latest_vix_price()
     current_spy_price, current_spy_date = fetch_spy_price()
     
-    if combined_data is not None and not combined_data.empty:
-        # Create a copy of combined_data for heatmap purposes
-        vix_data_full = combined_data.copy()
+    if vix_data is not None and not vix_data.empty and combined_data is not None and not combined_data.empty:
+        # Create a copy of vix_data for heatmap purposes
+        vix_data_full = vix_data.copy()
         
         # Calculate VIX thresholds using the full dataset
         threshold_2sd = vix_data_full['Close'].mean() + 2 * vix_data_full['Close'].std()
