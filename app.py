@@ -44,7 +44,7 @@ def fetch_vix_data(fred_api_key):
 @st.cache_data(ttl=300)  # Cache for 5 minutes due to delayed data
 def fetch_latest_vix_price():
     try:
-        url = "https://www.google.com/finance/quote/^VIX:INDEXCBOE"
+        url = "https://www.google.com/finance/quote/VIX:INDEXCBOE?hl=en"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         response = requests.get(url, headers=headers)
         response.raise_for_status()
