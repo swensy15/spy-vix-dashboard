@@ -6,11 +6,12 @@ import plotly.express as px
 from fredapi import Fred
 import requests
 from bs4 import BeautifulSoup
+import os
 
 # Streamlit page configuration
 st.set_page_config(page_title="VIX Dashboard", layout="wide")
 st.title("VIX Analysis")
-st.markdown("**Note**: VIX data is sourced from FRED (Federal Reserve Economic Data). SPY price is sourced from a delayed public web feed.")
+st.markdown("**Note**: VIX historical data is sourced from FRED (Federal Reserve Economic Data). VIX current price and SPY price are sourced from a delayed public web feed.")
 
 # Load API key from Streamlit secrets or environment variables
 try:
@@ -39,17 +40,26 @@ def fetch_vix_data(fred_api_key):
         st.error(f"Failed to fetch VIX data from FRED: {str(e)}")
         return None
 
-# Fetch latest price
-@st.cache_data(ttl=3600)
-def fetch_latest_vix_price(fred_api_key):
+# Fetch latest VIX price from Google Finance
+@st.cache_data(ttl=300)  # Cache for 5 minutes due to delayed data
+def fetch_latest_vix_price():
     try:
-        fred = Fred(api_key=fred_api_key)
-        vix_series = fred.get_series('VIXCLS')
-        latest_price = vix_series.iloc[-1]
-        latest_date = vix_series.index[-1].strftime("%Y-%m-%d")
-        return latest_price, latest_date
+        url = "https://www.google.com/finance/quote/^VIX:INDEXCBOE"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        price_element = soup.find('div', class_='YMlKec fxKbKc')
+        if price_element:
+            price = float(price_element.text.replace(',', ''))
+            date_element = soup.find('div', class_='ygUjEc')  # Approximate class for date
+            date = date_element.text if date_element else "Delayed"
+            return price, date
+        else:
+            st.error("Failed to parse VIX price from web source.")
+            return None, None
     except Exception as e:
-        st.error(f"Failed to fetch latest VIX price from FRED: {str(e)}")
+        st.error(f"Failed to fetch VIX price: {str(e)}")
         return None, None
 
 # Fetch delayed SPY price from Google Finance
@@ -64,7 +74,7 @@ def fetch_spy_price():
         price_element = soup.find('div', class_='YMlKec fxKbKc')
         if price_element:
             price = float(price_element.text.replace('$', '').replace(',', ''))
-            date_element = soup.find('div', class_='ygUjEc')  # Approximate class for date, may need adjustment
+            date_element = soup.find('div', class_='ygUjEc')  # Approximate class for date
             date = date_element.text if date_element else "Delayed"
             return price, date
         else:
@@ -85,7 +95,7 @@ if FRED_API_KEY:
     vix_data = load_data(FRED_API_KEY)
     
     # Load latest prices
-    current_vix_price, current_vix_date = fetch_latest_vix_price(FRED_API_KEY)
+    current_vix_price, current_vix_date = fetch_latest_vix_price()
     current_spy_price, current_spy_date = fetch_spy_price()
     
     if vix_data is not None and not vix_data.empty:
