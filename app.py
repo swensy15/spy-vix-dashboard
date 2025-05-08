@@ -11,7 +11,7 @@ import os
 # Streamlit page configuration
 st.set_page_config(page_title="VIX Dashboard", layout="wide")
 st.title("VIX Analysis")
-st.markdown("**Note**: VIX historical data is sourced from FRED (Federal Reserve Economic Data). VIX current price and SPY price are sourced from a delayed public web feed.")
+st.markdown("**Note**: VIX historical data and S&P 500 data are sourced from FRED (Federal Reserve Economic Data). VIX current price and SPY price are sourced from a delayed public web feed.")
 
 # Load API key from Streamlit secrets or environment variables
 try:
@@ -38,6 +38,21 @@ def fetch_vix_data(fred_api_key):
     
     except Exception as e:
         st.error(f"Failed to fetch VIX data from FRED: {str(e)}")
+        return None
+
+# Fetch S&P 500 data from FRED
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def fetch_sp500_data(fred_api_key):
+    try:
+        fred = Fred(api_key=fred_api_key)
+        sp500_series = fred.get_series('SP500', observation_start='1990-01-01')
+        df = pd.DataFrame(sp500_series, columns=['SP500'])
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+        return df
+    
+    except Exception as e:
+        st.error(f"Failed to fetch S&P 500 data from FRED: {str(e)}")
         return None
 
 # Fetch latest VIX price from Google Finance
@@ -84,23 +99,28 @@ def fetch_spy_price():
         st.error(f"Failed to fetch SPY price: {str(e)}")
         return None, None
 
-# Load VIX data
+# Load VIX and S&P 500 data
 def load_data(fred_key):
     vix_data = fetch_vix_data(fred_key)
-    return vix_data
+    sp500_data = fetch_sp500_data(fred_key)
+    if vix_data is not None and sp500_data is not None:
+        # Merge VIX and S&P 500 data on the date index
+        combined_data = vix_data.join(sp500_data, how='inner')
+        return combined_data
+    return None
 
 # Main app logic
 if FRED_API_KEY:
     # Load historical data
-    vix_data = load_data(FRED_API_KEY)
+    combined_data = load_data(FRED_API_KEY)
     
     # Load latest prices
     current_vix_price, current_vix_date = fetch_latest_vix_price()
     current_spy_price, current_spy_date = fetch_spy_price()
     
-    if vix_data is not None and not vix_data.empty:
-        # Create a copy of vix_data for heatmap purposes
-        vix_data_full = vix_data.copy()
+    if combined_data is not None and not combined_data.empty:
+        # Create a copy of combined_data for heatmap purposes
+        vix_data_full = combined_data.copy()
         
         # Calculate VIX thresholds using the full dataset
         threshold_2sd = vix_data_full['Close'].mean() + 2 * vix_data_full['Close'].std()
@@ -145,15 +165,27 @@ if FRED_API_KEY:
         })
         st.table(price_levels)
         
-        # Line Chart: VIX Prices
-        st.subheader("VIX Prices Over Time")
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(vix_data.index, vix_data["Close"], label="VIX", color="orange")
-        ax.set_title("VIX Prices Over Time")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Price")
-        ax.legend()
-        ax.grid(True)
+        # Line Chart: VIX and S&P 500 Prices Over Time
+        st.subheader("VIX and S&P 500 Prices Over Time")
+        fig, ax1 = plt.subplots(figsize=(12, 6))
+        
+        # Plot VIX on the left y-axis
+        ax1.plot(combined_data.index, combined_data["Close"], label="VIX", color="orange")
+        ax1.set_xlabel("Date")
+        ax1.set_ylabel("VIX Price", color="orange")
+        ax1.tick_params(axis='y', labelcolor="orange")
+        ax1.grid(True)
+        
+        # Create a second y-axis for S&P 500
+        ax2 = ax1.twinx()
+        ax2.plot(combined_data.index, combined_data["SP500"], label="S&P 500", color="blue")
+        ax2.set_ylabel("S&P 500 Price", color="blue")
+        ax2.tick_params(axis='y', labelcolor="blue")
+        
+        # Add title and legend
+        fig.suptitle("VIX and S&P 500 Prices Over Time (1990 - Present)")
+        fig.legend(loc="upper left", bbox_to_anchor=(0.1,0.9))
+        
         st.pyplot(fig)
         
         # Heatmaps for VIX Spikes
@@ -184,4 +216,4 @@ if FRED_API_KEY:
         st.plotly_chart(fig)
     
     else:
-        st.error("Failed to load VIX data. Please check your API key or try again later.")
+        st.error("Failed to load data. Please check your API key or try again later.")
