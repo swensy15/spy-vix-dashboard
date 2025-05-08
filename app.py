@@ -96,6 +96,10 @@ if FRED_API_KEY:
         threshold_2sd = vix_data_full['Close'].mean() + 2 * vix_data_full['Close'].std()
         threshold_3sd = vix_data_full['Close'].mean() + 3 * vix_data_full['Close'].std()
         
+        # Calculate VIX median and mean
+        vix_median = vix_data_full['Close'].median()
+        vix_mean = vix_data_full['Close'].mean()
+        
         # Assign spike levels using the full dataset
         vix_data_full['Spike Level'] = np.where(
             vix_data_full['Close'] >= threshold_3sd, '3SD',
@@ -110,21 +114,23 @@ if FRED_API_KEY:
         sorted_vix_prices = np.sort(vix_data_full['Close'])
         vix_percentile = (sorted_vix_prices < current_vix_price).sum() / len(sorted_vix_prices) * 100 if current_vix_price else 0
         
-        # Display current prices and thresholds
-        st.subheader("Current VIX & SPY Prices, Thresholds, and VIX Percentile Rank")
+        # Display current prices, thresholds, and statistics
+        st.subheader("Current VIX & SPY Prices, Thresholds, and VIX Statistics")
         price_levels = pd.DataFrame({
-            "Metric": ["Current VIX Price", "Current SPY Price", "2 Standard Deviations (VIX)", "3 Standard Deviations (VIX)", "VIX Percentile Rank"],
+            "Metric": ["Current VIX Price", "Current SPY Price", "2 Standard Deviations (VIX)", "3 Standard Deviations (VIX)", "VIX Percentile Rank", "VIX Median", "VIX Mean"],
             "Value": [
                 f"{current_vix_price:.2f}" if current_vix_price else "N/A",
                 f"{current_spy_price:.2f}" if current_spy_price else "N/A",
                 f"{threshold_2sd:.2f}",
                 f"{threshold_3sd:.2f}",
-                f"{vix_percentile:.2f}th Percentile" if current_vix_price else "N/A"
+                f"{vix_percentile:.2f}th Percentile" if current_vix_price else "N/A",
+                f"{vix_median:.2f}",
+                f"{vix_mean:.2f}"
             ],
             "Date": [
                 current_vix_date if current_vix_date else "N/A",
                 current_spy_date if current_spy_date else "N/A",
-                "-", "-", "-"
+                "-", "-", "-", "-", "-"
             ]
         })
         st.table(price_levels)
