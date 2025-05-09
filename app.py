@@ -183,7 +183,7 @@ if FRED_API_KEY:
         ax2.tick_params(axis='y', labelcolor="blue")
         
         # Add title and legend
-        fig.suptitle("VIX and S&P 500 Prices Over Time (1990 - Present)")
+        fig.suptitle("VIX and S&P 500 Prices Over Time")
         fig.legend(loc="upper left", bbox_to_anchor=(0.1,0.9))
         
         st.pyplot(fig)
