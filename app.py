@@ -188,32 +188,51 @@ if FRED_API_KEY:
         
         st.pyplot(fig)
         
-        # Heatmaps for VIX Spikes
-        st.subheader("Heatmap of 2SD VIX Spikes")
-        st.markdown("Visualizes the frequency of VIX spikes ≥ 2 standard deviations above the mean across all historical data.")
-        heatmap_data_2sd = vix_data_full[vix_data_full['Spike Level'] == '2SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
-        heatmap_data_2sd = heatmap_data_2sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value=0)
-        fig = px.imshow(
-            heatmap_data_2sd,
-            labels={"color": "Spike Count"},
-            title=f"Heatmap of 2SD VIX Spikes (Historical, {vix_data_full.index.year.min()}-{vix_data_full.index.year.max()})",
-            color_continuous_scale="YlOrRd"
-        )
-        fig.update_layout(xaxis_title="Day of the Month", yaxis_title="Month")
-        st.plotly_chart(fig)
+       # Heatmaps for VIX Spikes
+st.subheader("Heatmap of 2SD VIX Spikes")
+st.markdown("Visualizes the frequency of VIX spikes ≥ 2 standard deviations above the mean across all historical data.")
+# Filter 2SD spikes and group by Month, Day, and collect years
+spikes_2sd = vix_data_full[vix_data_full['Spike Level'] == '2SD'].copy()
+spikes_2sd['Year'] = spikes_2sd.index.year
+heatmap_data_2sd = spikes_2sd.groupby(['Month', 'Day']).size().unstack(fill_value=0)
+heatmap_data_2sd = heatmap_data_2sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value=0)
+# Create a DataFrame to store years for each (Month, Day)
+years_2sd = spikes_2sd.groupby(['Month', 'Day'])['Year'].apply(lambda x: ', '.join(x.astype(str))).unstack(fill_value='')
+years_2sd = years_2sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value='')
+# Create custom hover text
+hover_text_2sd = [[f"Month: {month}<br>Day: {day}<br>Spike Count: {heatmap_data_2sd.loc[month, day]}<br>Years: {years_2sd.loc[month, day]}" 
+                   for day in range(1, 32)] for month in range(1, 13)]
+fig = px.imshow(
+    heatmap_data_2sd,
+    labels={"color": "Spike Count"},
+    title=f"Heatmap of 2SD VIX Spikes (Historical, {vix_data_full.index.year.min()}-{vix_data_full.index.year.max()})",
+    color_continuous_scale="YlOrRd",
+    text_auto=False
+)
+fig.update_layout(xaxis_title="Day of the Month", yaxis_title="Month")
+fig.update_traces(hovertemplate='%{text}', text=hover_text_2sd)
+st.plotly_chart(fig)
 
-        st.subheader("Heatmap of 3SD VIX Spikes")
-        st.markdown("Visualizes the frequency of VIX spikes ≥ 3 standard deviations above the mean across all historical data.")
-        heatmap_data_3sd = vix_data_full[vix_data_full['Spike Level'] == '3SD'].groupby(['Month', 'Day']).size().unstack(fill_value=0)
-        heatmap_data_3sd = heatmap_data_3sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value=0)
-        fig = px.imshow(
-            heatmap_data_3sd,
-            labels={"color": "Spike Count"},
-            title=f"Heatmap of 3SD VIX Spikes (Historical, {vix_data_full.index.year.min()}-{vix_data_full.index.year.max()})",
-            color_continuous_scale="YlOrRd"
-        )
-        fig.update_layout(xaxis_title="Day of the Month", yaxis_title="Month")
-        st.plotly_chart(fig)
-    
-    else:
-        st.error("Failed to load data. Please check your API key or try again later.")
+st.subheader("Heatmap of 3SD VIX Spikes")
+st.markdown("Visualizes the frequency of VIX spikes ≥ 3 standard deviations above the mean across all historical data.")
+# Filter 3SD spikes and group by Month, Day, and collect years
+spikes_3sd = vix_data_full[vix_data_full['Spike Level'] == '3SD'].copy()
+spikes_3sd['Year'] = spikes_3sd.index.year
+heatmap_data_3sd = spikes_3sd.groupby(['Month', 'Day']).size().unstack(fill_value=0)
+heatmap_data_3sd = heatmap_data_3sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value=0)
+# Create a DataFrame to store years for each (Month, Day)
+years_3sd = spikes_3sd.groupby(['Month', 'Day'])['Year'].apply(lambda x: ', '.join(x.astype(str))).unstack(fill_value='')
+years_3sd = years_3sd.reindex(index=range(1, 13), columns=range(1, 32), fill_value='')
+# Create custom hover text
+hover_text_3sd = [[f"Month: {month}<br>Day: {day}<br>Spike Count: {heatmap_data_3sd.loc[month, day]}<br>Years: {years_3sd.loc[month, day]}" 
+                   for day in range(1, 32)] for month in range(1, 13)]
+fig = px.imshow(
+    heatmap_data_3sd,
+    labels={"color": "Spike Count"},
+    title=f"Heatmap of 3SD VIX Spikes (Historical, {vix_data_full.index.year.min()}-{vix_data_full.index.year.max()})",
+    color_continuous_scale="YlOrRd",
+    text_auto=False
+)
+fig.update_layout(xaxis_title="Day of the Month", yaxis_title="Month")
+fig.update_traces(hovertemplate='%{text}', text=hover_text_3sd)
+st.plotly_chart(fig)
