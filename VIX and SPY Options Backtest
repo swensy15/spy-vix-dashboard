@@ -1,0 +1,879 @@
+import nasdaqdatalink as ndl
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+import numpy as np
+import pandas_datareader.data as pdr
+import os
+from pathlib import Path
+import matplotlib.dates as mdates
+import matplotlib as mpl
+
+# Set matplotlib style for institutional look
+plt.style.use('seaborn-v0_8-whitegrid')
+mpl.rcParams['font.family'] = 'Times New Roman'
+mpl.rcParams['font.size'] = 12
+mpl.rcParams['axes.labelsize'] = 14
+mpl.rcParams['axes.titlesize'] = 16
+mpl.rcParams['legend.fontsize'] = 12
+mpl.rcParams['grid.alpha'] = 0.3
+mpl.rcParams['axes.facecolor'] = '#F5F6F5'
+
+# === TICKER CONFIGURATION ===
+TICKER = "SPY"
+
+# === API CONFIGURATION ===
+ndl.ApiConfig.api_key = "RQASBYFd589m2ZRsM1JU"
+
+# === CACHE DIRECTORY ===
+CACHE_DIR = r"C:\Users\smswe\OneDrive - Altlas Investment Management\Altas Investment Management\Investment Management\Options Strategy\Cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+# === CACHE VALIDATION ===
+def is_cache_valid(cache_file, end_year, days_threshold=7):
+    cache_path = Path(cache_file)
+    if not cache_path.exists():
+        return False
+    if end_year < 2024:
+        print(f"Using historical cache file {cache_file} for end_year {end_year}")
+        return True
+    file_age = (datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)).days
+    if file_age <= days_threshold:
+        print(f"Cache file {cache_file} is recent (age: {file_age} days), using it")
+        return True
+    print(f"Cache file {cache_file} is outdated (age: {file_age} days), will fetch new data")
+    return False
+
+# === UTILITY FUNCTIONS ===
+def get_closest_trading_day(date_str):
+    date = datetime.strptime(date_str, "%Y-%m-%d")
+    while date.weekday() > 4:
+        date -= timedelta(days=1)
+    return date.strftime("%Y-%m-%d")
+
+def fetch_vix_data(start_year, end_year):
+    cache_file = os.path.join(CACHE_DIR, f"cached_vix_{start_year}_{end_year}.parquet")
+    if is_cache_valid(cache_file, end_year):
+        data = pd.read_parquet(cache_file)
+        data.index = pd.to_datetime(data.index)
+        print(f"Loaded cached VIX data from {cache_file}")
+        return data['VIXCLS']
+    try:
+        start_date = f"{start_year}-01-01"
+        end_date = f"{end_year}-12-31"
+        vix = pdr.DataReader('VIXCLS', 'fred', start_date, end_date)
+        if vix.empty:
+            print(f"No VIX data from {start_year} to {end_year}")
+            return pd.Series()
+        vix = vix['VIXCLS']
+        vix.to_frame().to_parquet(cache_file)
+        print(f"Cached VIX data to {cache_file}")
+        return vix
+    except Exception as e:
+        print(f"Error fetching VIX data: {e}")
+        return pd.Series()
+
+def fetch_bond_yields(start_year, end_year):
+    cache_file = os.path.join(CACHE_DIR, f"cached_treasury_yields_{start_year}_{end_year}.json")
+    if is_cache_valid(cache_file, end_year):
+        with open(cache_file, 'r') as f:
+            print(f"Loaded cached Treasury yields from {cache_file}")
+            return pd.read_json(cache_file, orient='index', typ='series')
+    try:
+        yields = pdr.DataReader('DGS10', 'fred', f"{start_year}-01-01", f"{end_year}-12-31")
+        if yields.empty:
+            print(f"No Treasury yield data from {start_year} to {end_year}")
+            return pd.Series()
+        annual_yields = yields['DGS10'].resample('ME').mean()
+        annual_yields.to_json(cache_file)
+        print(f"Cached Treasury yields to {cache_file}")
+        return annual_yields
+    except Exception as e:
+        print(f"Error fetching Treasury yields: {e}")
+        return pd.Series()
+
+def fetch_stock_price_from_orats(ticker, date_str):
+    cache_file = os.path.join(CACHE_DIR, f"cached_stock_price_{ticker}_{date_str}.parquet")
+    date_year = int(date_str[:4])
+    if is_cache_valid(cache_file, date_year):
+        data = pd.read_parquet(cache_file)
+        if not data.empty:
+            price = data['stkpx'].iloc[0]
+            print(f"Loaded cached {ticker} price from {cache_file}: {price:.2f}")
+            return price
+        return None
+    try:
+        date = datetime.strptime(date_str, "%Y-%m-%d")
+        start_date = (date - timedelta(days=3)).strftime("%Y-%m-%d")
+        end_date = (date + timedelta(days=3)).strftime("%Y-%m-%d")
+        qcols = ["trade_date", "stkpx"]
+        data = ndl.get_table(
+            'ORATS/OSMV',
+            ticker=ticker,
+            trade_date={'gte': start_date, 'lte': end_date},
+            qopts={"columns": qcols},
+            paginate=True
+        )
+        if data.empty:
+            print(f"No {ticker} price data for {date_str}")
+            return None
+        data['trade_date'] = pd.to_datetime(data['trade_date'])
+        closest_date = min(data['trade_date'], key=lambda d: abs(d - date))
+        price = data[data['trade_date'] == closest_date]['stkpx'].iloc[0]
+        data.to_parquet(cache_file)
+        print(f"Cached {ticker} price to {cache_file}: {price:.2f}")
+        return price
+    except Exception as e:
+        print(f"Error fetching {ticker} price from ORATS: {e}")
+        return None
+
+def fetch_annual_returns(ticker, start_year, end_year):
+    annual_returns = {}
+    for year in range(start_year, end_year + 1):
+        start_date = f"{year}-01-01"
+        end_date = f"{year}-12-31"
+        start_price = fetch_stock_price_from_orats(ticker, start_date)
+        end_price = fetch_stock_price_from_orats(ticker, end_date)
+        if start_price and end_price and start_price > 0:
+            annual_return = (end_price - start_price) / start_price * 100
+            annual_returns[year] = annual_return
+        else:
+            annual_returns[year] = 0
+            print(f"Missing {ticker} data for {year}")
+    return annual_returns
+
+def fetch_leaps_data(ticker, date_str, end_date, underlying_price, strike=None, expirdate=None):
+    cache_file = os.path.join(CACHE_DIR, f"cached_options_{ticker}_{date_str}_{end_date}.parquet")
+    start_date_year = int(date_str[:4])
+    if is_cache_valid(cache_file, start_date_year):
+        data = pd.read_parquet(cache_file)
+        data['trade_date'] = pd.to_datetime(data['trade_date'])
+        data['expirdate'] = pd.to_datetime(data['expirdate'])
+        print(f"Loaded cached ORATS data for {ticker} from {cache_file}: {data[['cvalue', 'strike', 'expirdate']].to_dict('records')}")
+        return data
+
+    lower = underlying_price * 0.90
+    upper = underlying_price * 1.10
+    qcols = ["ticker", "strike", "expirdate", "trade_date", "cvalue", "delta", "vega", "smoothsmvvol", "stkpx"]
+
+    print(f"Fetching ORATS data for {ticker} on {date_str}...")
+    try:
+        data = ndl.get_table(
+            'ORATS/OSMV',
+            ticker=ticker,
+            trade_date={'gte': date_str, 'lte': date_str},
+            qopts={"columns": qcols},
+            paginate=True
+        )
+        if data.empty:
+            print(f"No ORATS data for {ticker} on {date_str}")
+            return pd.DataFrame()
+
+        data['trade_date'] = pd.to_datetime(data['trade_date'])
+        data['expirdate'] = pd.to_datetime(data['expirdate'])
+
+        if strike is None or expirdate is None:
+            trade_day_data = data
+            max_exp = trade_day_data['expirdate'].max()
+            days_to_expiration = (max_exp - pd.to_datetime(date_str)).days
+            if days_to_expiration < 609:
+                print(f"Skipping {date_str}: Longest expiration ({days_to_expiration} days) is less than 20 months")
+                return pd.DataFrame()
+            filtered = trade_day_data[
+                (trade_day_data['expirdate'] == max_exp) &
+                (trade_day_data['strike'] >= lower) &
+                (trade_day_data['strike'] <= upper) &
+                (trade_day_data['delta'] >= 0.40) &
+                (trade_day_data['delta'] <= 0.70)
+            ]
+            if filtered.empty:
+                print(f"No suitable LEAPS contracts for {date_str}")
+                return pd.DataFrame()
+            optimal_contract = filtered.loc[filtered['vega'].idxmax()]
+        else:
+            optimal_contract = data[
+                (data['strike'] == strike) &
+                (data['expirdate'] == expirdate)
+            ].iloc[0] if not data.empty and len(data[(data['strike'] == strike) & (data['expirdate'] == expirdate)]) > 0 else None
+
+        if optimal_contract is None:
+            print(f"No matching contract found for strike {strike} and expirdate {expirdate} on {date_str}")
+            return pd.DataFrame()
+
+        result = pd.DataFrame([optimal_contract])
+        print(f"Fetched ORATS data for {ticker}: {result[['cvalue', 'strike', 'expirdate']].to_dict('records')}")
+        result.to_parquet(cache_file)
+        print(f"Cached ORATS data for {ticker} to {cache_file}")
+        return result
+    except Exception as e:
+        print(f"Error fetching ORATS data for {ticker}: {e}")
+        return pd.DataFrame()
+
+def check_volatility_entry(vol_series, date, lookback=252):
+    if vol_series.empty:
+        return False
+    date = pd.to_datetime(date)
+    past_vol = vol_series[vol_series.index <= date][-lookback:]
+    if len(past_vol) < lookback:
+        return False
+    perc_10 = past_vol.quantile(0.10)
+    perc_50 = past_vol.quantile(0.50)
+    current_vol = vol_series.get(date, np.nan)
+    if np.isnan(current_vol):
+        return False
+    return perc_10 <= current_vol <= perc_50
+
+def check_vix_exit(vix_series, date, lookback=252, vix_threshold=2.0):
+    if vix_series.empty:
+        return False
+    date = pd.to_datetime(date)
+    past_vix = vix_series[vix_series.index <= date][-lookback:]
+    if len(past_vix) < lookback:
+        return False
+    mean_vix, std_vix = past_vix.mean(), past_vix.std()
+    current_vix = vix_series.get(date, np.nan)
+    if np.isnan(current_vix):
+        return False
+    spike_detected = current_vix >= mean_vix + vix_threshold * std_vix
+    if spike_detected:
+        print(f"VIX spike detected on {date.date()}: Current={current_vix:.2f}, Mean={mean_vix:.2f}, Threshold={mean_vix + vix_threshold * std_vix:.2f}")
+    return spike_detected
+
+def check_price_exit(entry_price, current_price, min_gain=0.25):
+    if entry_price <= 0 or current_price <= 0:
+        return False
+    price_return = (current_price - entry_price) / entry_price
+    gain_detected = price_return >= min_gain
+    if gain_detected:
+        print(f"Price gain detected: Entry={entry_price:.2f}, Current={current_price:.2f}, Return={price_return*100:.2f}%")
+    return gain_detected
+
+def check_early_loss_exit(entry_price, current_price, loss_threshold=-0.50):
+    if entry_price <= 0 or current_price <= 0:
+        return False
+    price_return = (current_price - entry_price) / entry_price
+    loss_detected = price_return <= loss_threshold
+    if loss_detected:
+        print(f"Early loss exit detected: Entry={entry_price:.2f}, Current={current_price:.2f}, Loss={price_return*100:.2f}%")
+    return loss_detected
+
+def check_poor_performance_exit(entry_price, current_prices, lookback_days=180, max_loss=-0.25):
+    if not current_prices or entry_price <= 0:
+        return False
+    recent_prices = current_prices[-lookback_days:] if len(current_prices) >= lookback_days else current_prices
+    if not recent_prices:
+        return False
+    min_return = min((p - entry_price) / entry_price for p in recent_prices)
+    poor_performance = min_return < max_loss
+    if poor_performance:
+        print(f"Poor performance detected: Min Return={min_return*100:.2f}% over last {lookback_days} days")
+    return poor_performance
+
+def monte_carlo_fixed_income_return(historical_yields, date, num_simulations=1000, std_dev=0.02):
+    date = pd.to_datetime(date)
+    year = date.year
+    if historical_yields.empty or date not in historical_yields.index:
+        mean_yield = 0.03
+    else:
+        mean_yield = historical_yields.loc[date] / 100 if date in historical_yields.index else historical_yields[historical_yields.index <= date][-1] / 100
+    simulated_returns = np.random.normal(mean_yield, std_dev, num_simulations)
+    return np.median(simulated_returns)
+
+def rebalance_portfolio(portfolio_value, leaps_value, target_leaps_alloc, alt_alloc=0.20):
+    fixed_alloc = 1.0 - target_leaps_alloc - alt_alloc
+    current_leaps_alloc = leaps_value / portfolio_value if portfolio_value > 0 else 0
+    lower_bound = max(0, target_leaps_alloc - 0.10)
+    upper_bound = min(1.0, target_leaps_alloc + 0.10)
+
+    if current_leaps_alloc < lower_bound or current_leaps_alloc > upper_bound:
+        print(f"Rebalancing: Current LEAPS Alloc={current_leaps_alloc*100:.2f}%, Target={target_leaps_alloc*100}%, Bounds=[{lower_bound*100:.2f}%, {upper_bound*100:.2f}%]")
+        target_leaps_value = portfolio_value * target_leaps_alloc
+        target_fixed_value = portfolio_value * fixed_alloc
+        target_alt_value = portfolio_value * alt_alloc
+        leaps_value = target_leaps_value
+        portfolio_value = leaps_value + target_fixed_value + target_alt_value
+    return portfolio_value, leaps_value
+
+def get_dynamic_leaps_alloc(vix_series, date, base_leaps_alloc, vix_data):
+    date = pd.to_datetime(date)
+    past_vix = vix_series[vix_series.index <= date][-252:]
+    if len(past_vix) < 252:
+        return base_leaps_alloc
+    perc_20 = past_vix.quantile(0.20)
+    perc_60 = past_vix.quantile(0.60)
+    current_vix = vix_data.get(date, np.nan)
+    if np.isnan(current_vix):
+        return base_leaps_alloc
+    if current_vix < perc_20:
+        return min(0.30, base_leaps_alloc + 0.10)
+    elif current_vix > perc_60:
+        return max(0.10, base_leaps_alloc - 0.10)
+    return base_leaps_alloc
+
+def run_backtest(ticker, start_year=2013, end_year=2024, max_positions=6, leaps_alloc=0.20, alt_alloc=0.20):
+    vix_data = fetch_vix_data(start_year, end_year)
+    bond_yields = fetch_bond_yields(start_year, end_year)
+    results = []
+    portfolio_value = 1000000
+    leaps_value = 0
+    fixed_alloc = 1.0 - leaps_alloc - alt_alloc
+    active_positions = []
+
+    years = list(range(start_year, end_year + 1))
+    portfolio_values = [portfolio_value] * len(years)
+    monthly_values = []
+    monthly_dates = pd.date_range(start=f"{start_year}-01-01", end=f"{end_year}-12-31", freq='ME')
+    year_end_dates = {year: pd.to_datetime(f"{year}-12-31") for year in years}
+    last_entry_date = None
+
+    start_date = pd.to_datetime(f"{start_year}-01-01")
+    end_date = pd.to_datetime(f"{end_year}-12-31")
+    current_date = start_date
+
+    while current_date <= end_date:
+        current_year = current_date.year
+        current_leaps_alloc = get_dynamic_leaps_alloc(vix_data, current_date, leaps_alloc, vix_data)
+        fixed_alloc = 1.0 - current_leaps_alloc - alt_alloc
+
+        if current_date in monthly_dates:
+            monthly_value = portfolio_value
+            fixed_income_return = monte_carlo_fixed_income_return(bond_yields, current_date) / 12
+            alt_return = np.clip(np.random.normal(8.0, 1.0) / 100, 0, 0.12) / 12
+            baseline_return = fixed_alloc * fixed_income_return + alt_alloc * alt_return
+            monthly_value *= (1 + baseline_return)
+            monthly_values.append(monthly_value)
+            portfolio_value = monthly_value
+
+        if current_date.month in [6, 12] and current_date.day == 30:
+            year_end_value = portfolio_value
+            leaps_value = sum(pos['contracts'] * pos['entry_price'] for pos in active_positions)
+            for pos in active_positions:
+                underlying_price = pos['underlying_price']
+                entry_price = pos['entry_price']
+                strike = pos['strike']
+                expirdate = pos['expirdate']
+                year_end_date_str = current_date.strftime("%Y-%m-%d")
+                current_leaps_data = fetch_leaps_data(ticker, year_end_date_str, year_end_date_str, underlying_price, strike, expirdate)
+                if not current_leaps_data.empty:
+                    current_price = current_leaps_data['cvalue'].iloc[0]
+                    leaps_value += pos['contracts'] * (current_price - entry_price)
+            portfolio_values[current_year - start_year] = year_end_value
+            print(f"Semi-annual portfolio value on {current_year}-{current_date.month:02d}-30: ${year_end_value:.2f}")
+            portfolio_value, leaps_value = rebalance_portfolio(portfolio_value, leaps_value, current_leaps_alloc, alt_alloc)
+            print(f"Rebalanced on {current_date.date()} to {current_leaps_alloc*100}%")
+
+        positions_to_remove = []
+        for idx, pos in enumerate(active_positions):
+            entry_date = pos['entry_date']
+            entry_price = pos['entry_price']
+            strike = pos['strike']
+            expirdate = pos['expirdate']
+            contracts = pos['contracts']
+            expiration_date = pd.to_datetime(expirdate)
+            max_hold_date = expiration_date - timedelta(days=60)
+            theta_decay_date = expiration_date - timedelta(days=90)
+            price_history = pos.get('price_history', [])
+
+            if current_date < entry_date:
+                continue
+
+            current_date_str = current_date.strftime("%Y-%m-%d")
+            current_leaps_data = fetch_leaps_data(ticker, current_date_str, current_date_str, pos['underlying_price'], strike, expirdate)
+            if current_leaps_data.empty:
+                for i in range(1, 31):
+                    fallback_date = (pd.to_datetime(current_date_str) - timedelta(days=i)).strftime("%Y-%m-%d")
+                    current_leaps_data = fetch_leaps_data(ticker, fallback_date, fallback_date, pos['underlying_price'], strike, expirdate)
+                    if not current_leaps_data.empty:
+                        current_price = current_leaps_data['cvalue'].iloc[0]
+                        print(f"Using fallback price from {fallback_date}: ${current_price:.2f}")
+                        break
+                else:
+                    # Enhanced fallback: Estimate price based on last known price and volatility
+                    if price_history:
+                        last_price = price_history[-1]
+                        vol = pos.get('volatility', 0.2)  # Default volatility if not available
+                        days_since_last = (current_date - pd.to_datetime(price_history[-1])).days
+                        estimated_return = np.random.normal(0, vol / np.sqrt(252) * days_since_last)
+                        current_price = last_price * (1 + estimated_return)
+                        print(f"Estimated price for {current_date_str}: ${current_price:.2f} (based on last price ${last_price:.2f})")
+                    else:
+                        current_price = entry_price
+                        print(f"No data or history for {current_date_str}, using entry price: ${current_price:.2f}")
+            else:
+                current_price = current_leaps_data['cvalue'].iloc[0]
+            price_history.append(current_price)
+            pos['price_history'] = price_history
+
+            exit_date_dt = current_date
+            if check_early_loss_exit(entry_price, current_price, loss_threshold=-0.50):
+                exit_reason = "Early exit at ~50% loss"
+                exit_date = exit_date_dt.strftime("%Y-%m-%d")
+            elif check_poor_performance_exit(entry_price, price_history, max_loss=-0.25):
+                exit_reason = "Significant deterioration (loss > 25%)"
+                exit_date = exit_date_dt.strftime("%Y-%m-%d")
+            elif exit_date_dt >= theta_decay_date:
+                exit_reason = "Theta decay threshold (90 days remaining)"
+                exit_date = exit_date_dt.strftime("%Y-%m-%d")
+            elif exit_date_dt > max_hold_date:
+                exit_reason = "Near expiration (60 days remaining)"
+                exit_date = exit_date_dt.strftime("%Y-%m-%d")
+            elif check_vix_exit(vix_data, exit_date_dt, vix_threshold=2.0):
+                if check_price_exit(entry_price, current_price, min_gain=0.25):
+                    exit_reason = "VIX spike with 25%+ gain"
+                    exit_date = exit_date_dt.strftime("%Y-%m-%d")
+                else:
+                    continue
+            elif check_poor_performance_exit(entry_price, price_history):
+                exit_reason = "Poor performance (loss > 25% over 180 days)"
+                exit_date = exit_date_dt.strftime("%Y-%m-%d")
+            else:
+                continue
+
+            print(f"Exiting LEAPS on {exit_date}: Reason={exit_reason}, Entry Date={entry_date.strftime('%Y-%m-%d')}, Entry Price=${entry_price:.2f}, Exit Price=${current_price:.2f}")
+            exit_leaps_data = fetch_leaps_data(ticker, exit_date, exit_date, pos['underlying_price'], strike, expirdate)
+            if exit_leaps_data.empty:
+                for i in range(1, 31):
+                    fallback_date = (exit_date_dt - timedelta(days=i)).strftime("%Y-%m-%d")
+                    exit_leaps_data = fetch_leaps_data(ticker, fallback_date, fallback_date, pos['underlying_price'], strike, expirdate)
+                    if not exit_leaps_data.empty:
+                        exit_date = fallback_date
+                        exit_price = exit_leaps_data['cvalue'].iloc[0]
+                        print(f"Using fallback exit date {exit_date} for pricing: ${exit_price:.2f}")
+                        break
+                else:
+                    # Enhanced fallback for exit price
+                    if price_history:
+                        last_price = price_history[-1]
+                        vol = pos.get('volatility', 0.2)
+                        days_since_last = (exit_date_dt - pd.to_datetime(price_history[-1])).days
+                        estimated_return = np.random.normal(0, vol / np.sqrt(252) * days_since_last)
+                        exit_price = last_price * (1 + estimated_return)
+                        print(f"Estimated exit price for {exit_date}: ${exit_price:.2f}")
+                    else:
+                        exit_price = 0
+                        print(f"No exit data for {exit_date}, assuming zero value")
+            else:
+                exit_price = exit_leaps_data['cvalue'].iloc[0]
+
+            leaps_return = (exit_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+            days_held = (exit_date_dt - pd.to_datetime(entry_date)).days
+            annualized_leaps_return = min(((1 + leaps_return / 100) ** (365.25 / days_held) - 1) * 100, 500.0) if days_held > 0 else 0
+            print(f"LEAPS Return={leaps_return:.2f}%, Days Held={days_held}, Annualized={annualized_leaps_return:.2f}%")
+
+            months_held = days_held / 30.42
+            fixed_income_return = monte_carlo_fixed_income_return(bond_yields, entry_date) * (months_held / 12)
+            alt_return = np.clip(np.random.normal(8.0, 1.0) / 100, 0, 0.12) * (months_held / 12)
+            baseline_return = fixed_alloc * fixed_income_return + alt_alloc * alt_return
+
+            position_value = contracts * exit_price
+            leaps_value -= contracts * entry_price
+            leaps_value += position_value
+            portfolio_value += (exit_price - entry_price) * contracts
+            portfolio_value *= (1 + baseline_return)
+            print(f"Portfolio Value=${portfolio_value:.2f}, LEAPS Value=${leaps_value:.2f}")
+
+            results.append({
+                "Year": current_year,
+                "Entry Date": entry_date.strftime("%Y-%m-%d"),
+                "Exit Date": exit_date,
+                "Entry Price ($)": entry_price,
+                "Exit Price ($)": exit_price,
+                "LEAPS Return (%)": leaps_return,
+                "Annualized LEAPS Return (%)": annualized_leaps_return,
+                "Portfolio Return (%)": (portfolio_value / portfolio_values[current_year - start_year - 1] - 1) * 100 if current_year > start_year else leaps_return * current_leaps_alloc,
+                "Portfolio Value ($)": portfolio_value,
+                "Exit Reason": exit_reason
+            })
+            positions_to_remove.append(idx)
+
+        for idx in sorted(positions_to_remove, reverse=True):
+            active_positions.pop(idx)
+
+        entry_date = current_date.strftime("%Y-%m-%d")
+        entry_date_dt = pd.to_datetime(entry_date)
+        month = current_date.month
+
+        if month not in [3, 10]:
+            current_date += timedelta(days=1)
+            continue
+
+        if last_entry_date and (entry_date_dt - last_entry_date).days < 92:
+            print(f"Skipping {entry_date} due to 3-month reentry delay")
+            current_date += timedelta(days=1)
+            continue
+
+        if len(active_positions) >= max_positions:
+            print(f"Skipping {entry_date}: Maximum positions ({max_positions}) reached")
+            current_date += timedelta(days=1)
+            continue
+
+        underlying_price = fetch_stock_price_from_orats(ticker, entry_date)
+        if underlying_price is None:
+            print(f"Skipping {entry_date} due to missing {ticker} price")
+            current_date += timedelta(days=1)
+            continue
+
+        entry_made = False
+        for i in range(30):
+            check_date = entry_date_dt + timedelta(days=i)
+            if check_volatility_entry(vix_data, check_date):
+                entry_date = check_date.strftime("%Y-%m-%d")
+                entry_date_dt = check_date
+                entry_made = True
+                break
+        if not entry_made:
+            entry_date = (entry_date_dt + timedelta(days=29)).strftime("%Y-%m-%d")
+            entry_date_dt = pd.to_datetime(entry_date)
+            print(f"Fallback entry on {entry_date} (no volatility condition met)")
+
+        leaps_end_date = (pd.to_datetime(entry_date) + timedelta(days=730)).strftime("%Y-%m-%d")
+        leaps_data = fetch_leaps_data(ticker, entry_date, leaps_end_date, underlying_price)
+        if leaps_data.empty:
+            print(f"No LEAPS data for {ticker} on {entry_date}")
+            current_date += timedelta(days=1)
+            continue
+
+        entry_price = leaps_data['cvalue'].iloc[0]
+        strike = leaps_data['strike'].iloc[0]
+        expirdate = leaps_data['expirdate'].iloc[0]
+        entry_vega = leaps_data['vega'].iloc[0]
+        entry_delta = leaps_data['delta'].iloc[0]
+        volatility = leaps_data['smoothsmvvol'].iloc[0] if 'smoothsmvvol' in leaps_data else 0.2
+        expiration_date = pd.to_datetime(expirdate)
+        contracts = (portfolio_value * current_leaps_alloc) / entry_price
+        print(f"Entered LEAPS on {entry_date}: Price=${entry_price:.2f}, Strike={strike:.2f}, Expiration={expiration_date.date()}, Vega={entry_vega:.2f}, Delta={entry_delta:.2f}, Contracts={contracts:.2f}")
+        active_positions.append({
+            "entry_date": entry_date_dt,
+            "entry_price": entry_price,
+            "strike": strike,
+            "expirdate": expirdate,
+            "underlying_price": underlying_price,
+            "contracts": contracts,
+            "volatility": volatility,
+            "price_history": []
+        })
+        leaps_value += contracts * entry_price
+        last_entry_date = entry_date_dt
+
+        current_date += timedelta(days=1)
+
+    if len(monthly_values) < len(monthly_dates):
+        final_value = portfolio_value
+        fixed_income_return = monte_carlo_fixed_income_return(bond_yields, end_date) / 12
+        alt_return = np.clip(np.random.normal(8.0, 1.0) / 100, 0, 0.12) / 12
+        baseline_return = fixed_alloc * fixed_income_return + alt_alloc * alt_return
+        final_value *= (1 + baseline_return)
+        monthly_values.append(final_value)
+        portfolio_value = final_value
+
+    if portfolio_values[-1] == portfolio_value:
+        year_end_value = portfolio_value
+        leaps_value = sum(pos['contracts'] * pos['entry_price'] for pos in active_positions)
+        for pos in active_positions:
+            underlying_price = pos['underlying_price']
+            entry_price = pos['entry_price']
+            strike = pos['strike']
+            expirdate = pos['expirdate']
+            year_end_date_str = end_date.strftime("%Y-%m-%d")
+            current_leaps_data = fetch_leaps_data(ticker, year_end_date_str, year_end_date_str, underlying_price, strike, expirdate)
+            if not current_leaps_data.empty:
+                current_price = current_leaps_data['cvalue'].iloc[0]
+                leaps_value += pos['contracts'] * (current_price - entry_price)
+        portfolio_values[-1] = year_end_value
+        print(f"Final year-end portfolio value on {end_year}-12-31: ${year_end_value:.2f}")
+
+    return results, portfolio_values, years, vix_data, monthly_values, monthly_dates
+
+def run_multiple_portfolios(ticker, start_year=2013, end_year=2024, max_positions=6):
+    leaps_allocations = [0.10, 0.20, 0.30]
+    alt_alloc = 0.20
+    all_results = {}
+    portfolio_values_dict = {}
+    years_dict = {}
+    monthly_values_dict = {}
+    monthly_dates_dict = {}
+    vix_data = fetch_vix_data(start_year, end_year)
+    final_portfolio_values = {}
+
+    annual_returns = fetch_annual_returns(ticker, start_year, end_year)
+    bond_yields = fetch_bond_yields(start_year, end_year)
+    avg_risk_free_rate = bond_yields.mean() / 100
+
+    for leaps_alloc in leaps_allocations:
+        print(f"\nRunning backtest with {leaps_alloc*100}% base LEAPS allocation for {ticker}...")
+        results, portfolio_values, years, _, monthly_values, monthly_dates = run_backtest(
+            ticker=ticker,
+            start_year=start_year,
+            end_year=end_year,
+            max_positions=max_positions,
+            leaps_alloc=leaps_alloc,
+            alt_alloc=alt_alloc
+        )
+        results_df = pd.DataFrame(results)
+        all_results[leaps_alloc] = results_df
+        portfolio_values_dict[leaps_alloc] = portfolio_values
+        years_dict[leaps_alloc] = years
+        monthly_values_dict[leaps_alloc] = monthly_values
+        monthly_dates_dict[leaps_alloc] = monthly_dates
+
+    output_dir = r"C:\Users\smswe\OneDrive - Altlas Investment Management\Altas Investment Management\Investment Management\Options Strategy"
+    base_name = f"{ticker}_Dynamic_Backtest_Optimized"
+
+    initial_value = 1000000
+    normalized_portfolio_values = {}
+    for leaps_alloc in leaps_allocations:
+        normalized_portfolio_values[leaps_alloc] = [v / initial_value for v in portfolio_values_dict[leaps_alloc]]
+
+    summaries = []
+    for leaps_alloc, results_df in all_results.items():
+        if results_df.empty:
+            print(f"No valid trades executed for {leaps_alloc*100}% LEAPS allocation.")
+            continue
+
+        output_path = os.path.join(output_dir, f"{base_name}_leaps_alloc_{int(leaps_alloc*100)}pct.csv")
+        results_df.to_csv(output_path, index=False)
+        print(f"Results saved to {output_path}")
+
+        year_end_values = {year: 1000000 for year in range(start_year, end_year + 1)}
+        portfolio_value = 1000000
+        for year in range(start_year, end_year + 1):
+            year_trades = results_df[results_df['Year'] == year]
+            if not year_trades.empty:
+                portfolio_value = year_trades.iloc[-1]['Portfolio Value ($)']
+            fixed_income_return = monte_carlo_fixed_income_return(bond_yields, f"{year}-12-31")
+            alt_return = np.clip(np.random.normal(8.0, 1.0) / 100, 0, 0.12)
+            fixed_alloc = 1.0 - leaps_alloc - alt_alloc
+            baseline_return = fixed_alloc * fixed_income_return + alt_alloc * alt_return
+            portfolio_value *= (1 + baseline_return)
+            year_end_values[year] = portfolio_value
+
+        corrected_portfolio_values = [year_end_values[year] for year in range(start_year, end_year + 1)]
+        portfolio_values_dict[leaps_alloc] = corrected_portfolio_values
+        final_portfolio_values[leaps_alloc] = corrected_portfolio_values[-1]
+        print(f"\nEnding Portfolio Value for {leaps_alloc*100}% LEAPS Allocation: ${corrected_portfolio_values[-1]:.2f}")
+
+        wealth = np.array(corrected_portfolio_values)
+        peak = np.maximum.accumulate(wealth)
+        drawdown = (wealth - peak) / peak * 100
+        max_drawdown = drawdown.min()
+
+        summary = {
+            "LEAPS Allocation (%)": leaps_alloc * 100,
+            "Total Trades": len(results_df),
+            "Avg Annualized LEAPS Return (%)": results_df['Annualized LEAPS Return (%)'].mean(),
+            "Avg Portfolio Return (%)": results_df['Portfolio Return (%)'].mean(),
+            "Max Drawdown (%)": max_drawdown,
+            "Final Portfolio Value ($)": corrected_portfolio_values[-1]
+        }
+        summaries.append(summary)
+
+    summary_path = os.path.join(output_dir, f"{base_name}_summary.xlsx")
+    with pd.ExcelWriter(summary_path, engine='xlsxwriter') as writer:
+        summary_df = pd.DataFrame(summaries)
+        summary_df.to_excel(writer, sheet_name='Summary', index=False)
+        print(f"Summary saved to {summary_path} (Summary sheet)")
+
+        for year in range(start_year, end_year + 1):
+            yearly_trades = []
+            for leaps_alloc, results_df in all_results.items():
+                if results_df.empty:
+                    continue
+                year_trades = results_df[results_df['Year'] == year].copy()
+                if not year_trades.empty:
+                    year_trades['LEAPS Allocation (%)'] = leaps_alloc * 100
+                    yearly_trades.append(year_trades)
+            
+            if yearly_trades:
+                yearly_df = pd.concat(yearly_trades, ignore_index=True)
+                cols = ['LEAPS Allocation (%)', 'Year', 'Entry Date', 'Exit Date', 'Entry Price ($)', 'Exit Price ($)', 'LEAPS Return (%)', 'Annualized LEAPS Return (%)', 'Portfolio Return (%)', 'Portfolio Value ($)', 'Exit Reason']
+                yearly_df = yearly_df[cols]
+                yearly_df = yearly_df.sort_values(by=['LEAPS Allocation (%)', 'Entry Date'])
+                yearly_df.to_excel(writer, sheet_name=str(year), index=False)
+                print(f"Trade log for {year} saved to {summary_path} ({year} sheet)")
+    fig, ax1 = plt.subplots(figsize=(12, 7))
+    ax2 = ax1.twinx()
+    colors = {0.10: '#1f77b4', 0.20: '#2ca02c', 0.30: '#d62728'}
+
+    for leaps_alloc in leaps_allocations:
+        years = years_dict[leaps_alloc]
+        values = normalized_portfolio_values[leaps_alloc]
+        ax1.plot(years, values, label=f"LEAPS {leaps_alloc*100}%", color=colors[leaps_alloc], linewidth=2)
+        ax2.plot(years, [(v - 1) * 100 for v in values], color=colors[leaps_alloc], alpha=0)
+
+    ax1.set_xlabel("Year")
+    ax1.set_ylabel("Portfolio Growth (Initial = 1)")
+    ax2.set_ylabel("Growth (%)")
+    ax1.set_ylim(0.9, max(max(normalized_portfolio_values.values(), key=max)) * 1.1)
+    ax2.set_ylim([(0.9 - 1) * 100, (max(max(normalized_portfolio_values.values(), key=max)) - 1) * 100 * 1.1])
+    ax1.axhline(y=1, color='black', linestyle='--', linewidth=0.8)
+    ax1.grid(True, which="both", ls="--", alpha=0.3)
+    ax1.legend(loc='upper left')
+    plt.title(f"Portfolio Growth Across LEAPS Allocations for {ticker}\n(Initial $1M = 1)", pad=20)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"{base_name}_portfolio_growth_comparison.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    fig, ax1 = plt.subplots(figsize=(14, 8))
+    ax2 = ax1.twinx()
+    initial_value = 1000000
+
+    for leaps_alloc in leaps_allocations:
+        dates = monthly_dates_dict[leaps_alloc]
+        values = monthly_values_dict[leaps_alloc]
+        ax1.plot(dates, values, label=f"LEAPS {leaps_alloc*100}%", color=colors[leaps_alloc], linewidth=2)
+        
+        results_df = all_results[leaps_alloc]
+        for _, row in results_df.iterrows():
+            exit_date = pd.to_datetime(row['Exit Date'])
+            leaps_return = row['LEAPS Return (%)']
+            portfolio_value = row['Portfolio Value ($)']
+            if leaps_return > 100 or leaps_return < -50:
+                ax1.annotate(
+                    f"{leaps_return:.1f}%",
+                    (exit_date, portfolio_value),
+                    textcoords="offset points",
+                    xytext=(0, 10),
+                    ha='center',
+                    fontsize=10,
+                    color=colors[leaps_alloc],
+                    arrowprops=dict(arrowstyle="->", color=colors[leaps_alloc])
+                )
+
+    high_vix_periods = vix_data[vix_data > 30].index
+    for date in high_vix_periods:
+        ax1.axvspan(date, date + timedelta(days=1), color='grey', alpha=0.1, zorder=0)
+
+    ax1.set_yscale('log')
+    ax1.set_ylim(5e5, max(max(monthly_values_dict.values(), key=max)) * 1.5)
+    ax1.set_xlabel("Date")
+    ax1.set_ylabel("Portfolio Value ($)")
+    ax2.set_yscale('log')
+    min_value = min(min(monthly_values_dict.values(), key=min))
+    max_value = max(max(monthly_values_dict.values(), key=max))
+    ax2.set_ylim(5e5, max_value * 1.5)
+    ax2.set_yticks(ax1.get_yticks())
+    ax2.set_yticklabels([f"{((tick / initial_value) - 1) * 100:.0f}%" for tick in ax1.get_yticks()])
+    ax2.set_ylabel("Growth (%)")
+    ax1.xaxis.set_major_locator(mdates.YearLocator())
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    ax1.grid(True, which="both", ls="--", alpha=0.3)
+    ax1.legend(loc='upper left')
+
+    cagr = ((max_value / initial_value) ** (1 / (end_year - start_year + 1)) - 1) * 100
+    sharpe = all_results[0.20]['Portfolio Return (%)'].mean() / all_results[0.20]['Portfolio Return (%)'].std() if not all_results[0.20].empty else 0
+    plt.title(f"Vega-Driven LEAPS Strategy Performance for {ticker}\nCAGR: {cagr:.2f}%, Sharpe Ratio: {sharpe:.2f}", pad=20)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"{base_name}_performance_logarithmic.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    for leaps_alloc, results_df in all_results.items():
+        if results_df.empty:
+            continue
+        vix_changes = []
+        for _, row in results_df.iterrows():
+            entry_vix = vix_data.get(pd.to_datetime(row['Entry Date']), np.nan)
+            exit_vix = vix_data.get(pd.to_datetime(row['Exit Date']), np.nan)
+            if not np.isnan(entry_vix) and not np.isnan(exit_vix):
+                vix_changes.append(exit_vix - entry_vix)
+            else:
+                vix_changes.append(np.nan)
+
+        plt.figure(figsize=(10, 6))
+        plt.scatter(vix_changes, results_df["LEAPS Return (%)"], color=colors[leaps_alloc], alpha=0.5)
+        plt.xlabel("VIX Change (Exit - Entry)")
+        plt.ylabel("LEAPS Return (%)")
+        plt.title(f"LEAPS Returns vs. VIX Changes for {ticker}\n(LEAPS Alloc: {leaps_alloc*100}%)")
+        plt.grid(True, which="both", ls="--", alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"{base_name}_vix_vs_returns_leaps_alloc_{int(leaps_alloc*100)}pct.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+
+    print("\n=== Performance Metrics by Portfolio ===")
+    cagr = np.prod([(1 + ret / 100) for ret in annual_returns.values()]) ** (1 / (end_year - start_year + 1)) - 1
+    for leaps_alloc in leaps_allocations:
+        years = years_dict[leaps_alloc]
+        values = portfolio_values_dict[leaps_alloc]
+        
+        annual_returns_portfolio = {}
+        for i in range(1, len(years)):
+            year = years[i]
+            if values[i-1] > 0:
+                annual_return = (values[i] - values[i-1]) / values[i-1] * 100
+            else:
+                annual_return = 0
+            annual_returns_portfolio[year] = annual_return
+        
+        monthly_values = monthly_values_dict[leaps_alloc]
+        monthly_dates = monthly_dates_dict[leaps_alloc]
+        monthly_returns = []
+        for i in range(1, len(monthly_values)):
+            if monthly_values[i-1] > 0:
+                monthly_return = (monthly_values[i] - monthly_values[i-1]) / monthly_values[i-1]
+                monthly_returns.append(monthly_return)
+            else:
+                monthly_returns.append(0)
+
+        monthly_rf_rates = []
+        for date in monthly_dates[1:]:
+            rf_rate = bond_yields.loc[date] / 100 / 12 if date in bond_yields.index else 0.03 / 12
+            monthly_rf_rates.append(rf_rate)
+
+        excess_returns = [ret - rf for ret, rf in zip(monthly_returns, monthly_rf_rates)]
+        mean_excess_return = np.mean(excess_returns)
+        std_dev_monthly = np.std(monthly_returns) if monthly_returns else 0
+        sharpe_ratio = (mean_excess_return * 12) / (std_dev_monthly * np.sqrt(12)) if std_dev_monthly != 0 else 0
+
+        negative_excess_returns = [ret for ret in excess_returns if ret < 0]
+        downside_deviation = np.std(negative_excess_returns) if negative_excess_returns else 0
+        sortino_ratio = (mean_excess_return * 12) / (downside_deviation * np.sqrt(12)) if downside_deviation != 0 else 0
+
+        results_df = all_results[leaps_alloc]
+        if not results_df.empty:
+            leaps_returns = results_df['LEAPS Return (%)'].values / 100
+            monthly_leaps_returns = []
+            for _, row in results_df.iterrows():
+                entry_date = pd.to_datetime(row['Entry Date'])
+                exit_date = pd.to_datetime(row['Exit Date'])
+                months_held = (exit_date.year - entry_date.year) * 12 + (exit_date.month - entry_date.month)
+                if months_held > 0:
+                    monthly_leaps_return = ((1 + row['LEAPS Return (%)'] / 100) ** (1 / months_held) - 1)
+                    monthly_leaps_returns.extend([monthly_leaps_return] * months_held)
+            std_dev_leaps_monthly = np.std(monthly_leaps_returns) if monthly_leaps_returns else 0
+            print(f"\nDiagnostic for {leaps_alloc*100}% LEAPS Allocation for {ticker}:")
+            print(f"Monthly Portfolio Std Dev (used in Sharpe): {std_dev_monthly * 100:.2f}%")
+            print(f"Monthly LEAPS Std Dev (for comparison): {std_dev_leaps_monthly * 100:.2f}%")
+
+        annual_returns_list = [ret for ret in annual_returns_portfolio.values()]
+        std_dev_annual = np.std(annual_returns_list) if annual_returns_list else 0
+        num_years = end_year - start_year + 1
+        if values[0] > 0:
+            portfolio_cagr = (values[-1] / values[0]) ** (1 / num_years) - 1
+            portfolio_cagr = portfolio_cagr * 100
+        else:
+            portfolio_cagr = 0
+        expected_return = avg_risk_free_rate + 1 * (cagr - avg_risk_free_rate)
+        alpha = (portfolio_cagr / 100) - expected_return
+        alpha = alpha * 100
+
+        print(f"\nPortfolio with {leaps_alloc*100}% LEAPS Allocation for {ticker}:")
+        print("Annual Returns (%):")
+        for year, ret in annual_returns_portfolio.items():
+            print(f"  {year}: {ret:.2f}%")
+        print(f"CAGR (2013-2024): {portfolio_cagr:.2f}%")
+        print(f"Standard Deviation of Annual Returns: {std_dev_annual:.2f}%")
+        print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+        print(f"Sortino Ratio: {sortino_ratio:.2f}")
+        print(f"Alpha over {ticker}: {alpha:.2f}%")
+
+    print("\n=== Summary of Final Portfolio Values ===")
+    for leaps_alloc in sorted(final_portfolio_values.keys()):
+        print(f"LEAPS Allocation {leaps_alloc*100:.0f}%: ${final_portfolio_values[leaps_alloc]:,.2f}")
+
+    return all_results
+
+if __name__ == "__main__":
+    all_results = run_multiple_portfolios(ticker=TICKER, start_year=2013, end_year=2024, max_positions=6)
+    for leaps_alloc, results_df in all_results.items():
+        if not results_df.empty:
+            print(f"\nSample Results for {leaps_alloc*100}% LEAPS Allocation for {TICKER}:")
+            print(results_df[['Year', 'Entry Date', 'Exit Date', 'Entry Price ($)', 'Exit Price ($)', 'LEAPS Return (%)', 'Annualized LEAPS Return (%)', 'Portfolio Return (%)', 'Exit Reason']].head())
